@@ -301,6 +301,49 @@ export function deleteChunk(id: number): void {
   );
 }
 
+// --- Search chunks ---
+
+export function searchChunks(
+  query: string,
+  project?: string,
+  status?: string
+): ChunkSummary[] {
+  const db = getDb();
+  const pattern = `%${query}%`;
+  let sql = `SELECT id, project, title, status, sequence, refs, created_at, updated_at, deleted_at
+             FROM chunks WHERE deleted_at IS NULL
+             AND (title LIKE ? COLLATE NOCASE OR body LIKE ? COLLATE NOCASE OR refs LIKE ? COLLATE NOCASE)`;
+  const params: unknown[] = [pattern, pattern, pattern];
+
+  if (project) {
+    sql += " AND project = ?";
+    params.push(project);
+  }
+  if (status) {
+    sql += " AND status = ?";
+    params.push(status);
+  }
+
+  const rows = db.prepare(sql).all(...params) as ChunkRow[];
+  const summaries = rows.map(rowToSummary);
+  return orderBy(summaries, [(c) => c.sequence], ["asc"]);
+}
+
+// --- Append to chunk ---
+
+export function appendToChunk(id: number, text: string): Chunk {
+  const db = getDb();
+  const existing = getChunk(id);
+  if (!existing) throw new Error(`Chunk ${id} not found`);
+
+  const newBody = existing.body ? existing.body + "\n\n" + text : text;
+  db.prepare(
+    "UPDATE chunks SET body = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(newBody, id);
+
+  return getChunk(id)!;
+}
+
 // --- For CLI: deleted chunks ---
 
 export function listDeletedChunks(project?: string): ChunkSummary[] {

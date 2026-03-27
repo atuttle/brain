@@ -9,6 +9,8 @@ import {
   getChunk,
   updateChunk,
   deleteChunk,
+  searchChunks,
+  appendToChunk,
   listQueues,
   enqueue,
   getQueueLength,
@@ -209,6 +211,57 @@ server.registerTool("delete_chunk", {
     deleteChunk(id);
     return {
       content: [{ type: "text" as const, text: `Chunk ${id} soft-deleted.` }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+});
+
+// --- search_chunks ---
+
+server.registerTool("search_chunks", {
+  description:
+    "Search chunks by keyword across title, body, and refs. Case-insensitive. Optionally filter by project and/or status. Returns summaries (no body). Use get_chunk to read matching chunks.",
+  inputSchema: {
+    query: z.string().describe("Search term (case-insensitive substring match)"),
+    project: z
+      .string()
+      .optional()
+      .describe("Limit search to a specific project"),
+    status: z
+      .string()
+      .optional()
+      .describe("Limit search to a specific status"),
+  },
+}, async ({ query, project, status }) => {
+  const chunks = searchChunks(query, project, status);
+  if (chunks.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: `No chunks matching "${query}".` }],
+    };
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(chunks, null, 2) }],
+  };
+});
+
+// --- append_to_chunk ---
+
+server.registerTool("append_to_chunk", {
+  description:
+    "Append text to a chunk's body. The text is added after two blank lines. Useful for incrementally building up notes, logs, or research.",
+  inputSchema: {
+    id: z.number().describe("Chunk ID"),
+    text: z.string().describe("Text to append to the chunk body"),
+  },
+}, async ({ id, text }) => {
+  try {
+    const chunk = appendToChunk(id, text);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(chunk, null, 2) }],
     };
   } catch (e) {
     return {

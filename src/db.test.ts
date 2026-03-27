@@ -1,8 +1,4 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
-import { join } from "path";
-
-// Point DB at a temp file in the project dir (writable) before importing db module
-process.env.MCP_BRAIN_DB = join(import.meta.dirname!, ".test-brain.db");
 
 import {
   getDb,
@@ -16,6 +12,8 @@ import {
   getChunk,
   updateChunk,
   deleteChunk,
+  searchChunks,
+  appendToChunk,
   listDeletedChunks,
   restoreChunk,
   emptyTrash,
@@ -317,6 +315,148 @@ describe("delete & restore", () => {
 
   it("emptyTrash returns 0 when trash is empty", () => {
     expect(emptyTrash()).toBe(0);
+  });
+});
+
+// ─── Search ─────────────────────────────────────────────
+
+describe("searchChunks", () => {
+  it("matches title", () => {
+    upsertProject("p");
+    createChunks("p", [{ title: "deploy pipeline" }, { title: "unrelated" }]);
+    const results = searchChunks("pipeline");
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("deploy pipeline");
+  });
+
+  it("matches body", () => {
+    upsertProject("p");
+    createChunks("p", [{ title: "notes", body: "the frobnitz is broken" }]);
+    const results = searchChunks("frobnitz");
+    expect(results).toHaveLength(1);
+  });
+
+  it("matches refs", () => {
+    upsertProject("p");
+    createChunks("p", [{ title: "task", refs: ["/src/utils.ts"] }]);
+    const results = searchChunks("utils.ts");
+    expect(results).toHaveLength(1);
+  });
+
+  it("is case-insensitive", () => {
+    upsertProject("p");
+    createChunks("p", [{ title: "UPPERCASE THING" }]);
+    const results = searchChunks("uppercase");
+    expect(results).toHaveLength(1);
+  });
+
+  it("returns empty array for no matches", () => {
+    upsertProject("p");
+    createChunks("p", [{ title: "hello" }]);
+    expect(searchChunks("zzzzz")).toEqual([]);
+  });
+
+  it("scopes to project", () => {
+    upsertProject("a");
+    upsertProject("b");
+    createChunks("a", [{ title: "needle" }]);
+    createChunks("b", [{ title: "needle" }]);
+    expect(searchChunks("needle", "a")).toHaveLength(1);
+    expect(searchChunks("needle", "a")[0].project).toBe("a");
+  });
+
+  it("scopes to status", () => {
+    upsertProject("p");
+    const [id1] = createChunks("p", [{ title: "needle a" }, { title: "needle b" }]);
+    updateChunk(id1, { status: "active" });
+    expect(searchChunks("needle", undefined, "active")).toHaveLength(1);
+  });
+
+  it("excludes soft-deleted chunks", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [{ title: "findme" }]);
+    deleteChunk(id);
+    expect(searchChunks("findme")).toEqual([]);
+  });
+
+  it("returns summaries without body", () => {
+    upsertProject("p");
+    createChunks("p", [{ title: "hit", body: "searchable content" }]);
+    const [result] = searchChunks("searchable");
+    expect(result).not.toHaveProperty("body");
+  });
+
+  it("returns multiple results sorted by sequence", () => {
+    upsertProject("p");
+    createChunks("p", [
+      { title: "needle C", sequence: "10" },
+      { title: "needle A", sequence: "2" },
+      { title: "needle B", sequence: "3" },
+    ]);
+    const results = searchChunks("needle");
+    expect(results.map((c) => c.sequence)).toEqual(["2", "3", "10"]);
+  });
+});
+
+// ─── Append to chunk ────────────────────────────────────
+
+describe("appendToChunk", () => {
+  it("appends to chunk with existing body", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [{ title: "t", body: "first" }]);
+    const updated = appendToChunk(id, "second");
+    expect(updated.body).toBe("first\n\nsecond");
+  });
+
+  it("appends to chunk with empty body (no leading separator)", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [{ title: "t" }]);
+    const updated = appendToChunk(id, "content");
+    expect(updated.body).toBe("content");
+  });
+
+  it("bumps updated_at", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [{ title: "t" }]);
+    const before = getChunk(id)!.updated_at;
+    const updated = appendToChunk(id, "more");
+    expect(updated.updated_at >= before).toBe(true);
+  });
+
+  it("returns full chunk with all fields", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [
+      { title: "t", body: "b", sequence: "1", refs: ["/a.ts"] },
+    ]);
+    const updated = appendToChunk(id, "extra");
+    expect(updated.id).toBe(id);
+    expect(updated.title).toBe("t");
+    expect(updated.sequence).toBe("1");
+    expect(updated.refs).toEqual(["/a.ts"]);
+    expect(updated.body).toBe("b\n\nextra");
+  });
+
+  it("throws for nonexistent chunk", () => {
+    expect(() => appendToChunk(99999, "x")).toThrow("not found");
+  });
+
+  it("preserves other fields unchanged", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [{ title: "t", body: "orig" }]);
+    updateChunk(id, { status: "active", sequence: "5" });
+    const appended = appendToChunk(id, "new stuff");
+    expect(appended.status).toBe("active");
+    expect(appended.sequence).toBe("5");
+    expect(appended.title).toBe("t");
+  });
+
+  it("handles multiple appends", () => {
+    upsertProject("p");
+    const [id] = createChunks("p", [{ title: "t" }]);
+    appendToChunk(id, "one");
+    appendToChunk(id, "two");
+    const chunk = appendToChunk(id, "three");
+    expect(chunk.body).toBe("one\n\ntwo\n\nthree");
   });
 });
 

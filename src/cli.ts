@@ -9,6 +9,7 @@ import {
   getProject,
   listChunks,
   getChunk,
+  searchChunks,
   listDeletedChunks,
   restoreChunk,
   emptyTrash,
@@ -37,6 +38,7 @@ async function mainMenu(): Promise<void> {
       choices: [
         { name: "List projects", value: "list-projects" },
         { name: "Browse records", value: "browse" },
+        { name: "Search records", value: "search" },
         { name: "View deleted records", value: "trash" },
         { name: "Restore a record", value: "restore" },
         { name: "Empty trash", value: "empty-trash" },
@@ -53,6 +55,9 @@ async function mainMenu(): Promise<void> {
         break;
       case "browse":
         await browseChunks();
+        break;
+      case "search":
+        await searchMenu();
         break;
       case "trash":
         await viewTrash();
@@ -156,6 +161,47 @@ async function browseChunks(): Promise<void> {
   console.log(`${"─".repeat(60)}`);
   console.log(full.body || "(empty body)");
   console.log(`${"─".repeat(60)}\n`);
+}
+
+async function searchMenu(): Promise<void> {
+  const query = await input({ message: "Search query" });
+  if (!query.trim()) return;
+
+  const results = searchChunks(query.trim());
+  if (results.length === 0) {
+    console.log("No matching records.");
+    return;
+  }
+
+  console.log(`\n${results.length} result(s):\n`);
+  for (const c of results) {
+    console.log(`  #${c.id} [${c.project}] (${c.status}) ${c.title}`);
+  }
+  console.log();
+}
+
+function handleSearch(): void {
+  const args = process.argv.slice(2);
+  const searchIdx = args.indexOf("--search");
+  if (searchIdx === -1) return;
+
+  const query = args.slice(searchIdx + 1).join(" ");
+  if (!query) {
+    console.error("Usage: mcp-brain --search <query>");
+    process.exit(1);
+  }
+
+  getDb();
+  const results = searchChunks(query);
+  if (results.length === 0) {
+    console.log("No matching records.");
+    process.exit(0);
+  }
+
+  for (const c of results) {
+    console.log(`#${c.id} [${c.project}] (${c.status}) ${c.title}`);
+  }
+  process.exit(0);
 }
 
 async function viewTrash(): Promise<void> {
@@ -466,8 +512,9 @@ async function installCron(): Promise<void> {
   });
   if (!ok) return;
 
+  const nodePath = process.execPath;
   const cliPath = process.argv[1];
-  const cronLine = `0 * * * * node "${cliPath}" --backup`;
+  const cronLine = `0 * * * * "${nodePath}" "${cliPath}" --backup`;
 
   try {
     const existing = execSync("crontab -l 2>/dev/null", {
@@ -491,7 +538,9 @@ async function installCron(): Promise<void> {
 }
 
 // Support non-interactive flags
-if (process.argv.includes("--enqueue")) {
+if (process.argv.includes("--search")) {
+  handleSearch();
+} else if (process.argv.includes("--enqueue")) {
   handleStdinEnqueue();
 } else if (process.argv.includes("--backup")) {
   getDb(); // ensure DB exists

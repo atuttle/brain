@@ -150,7 +150,7 @@ server.registerTool("list_chunks", {
 server.registerTool("get_chunk", {
   description: "Get the full content of a chunk by ID, including its body.",
   inputSchema: {
-    id: z.number().describe("Chunk ID"),
+    id: z.coerce.number().describe("Chunk ID"),
   },
 }, async ({ id }) => {
   const chunk = getChunk(id);
@@ -171,7 +171,7 @@ server.registerTool("update_chunk", {
   description:
     "Update a chunk's title, body, status, sequence, or references. Only include fields you want to change.",
   inputSchema: {
-    id: z.number().describe("Chunk ID"),
+    id: z.coerce.number().describe("Chunk ID"),
     title: z.string().optional().describe("New title"),
     body: z.string().optional().describe("New body content"),
     status: z
@@ -204,7 +204,7 @@ server.registerTool("delete_chunk", {
   description:
     "Soft-delete a chunk. The chunk can be restored later via the CLI. Use this when a chunk is no longer needed.",
   inputSchema: {
-    id: z.number().describe("Chunk ID"),
+    id: z.coerce.number().describe("Chunk ID"),
   },
 }, async ({ id }) => {
   try {
@@ -254,7 +254,7 @@ server.registerTool("append_to_chunk", {
   description:
     "Append text to a chunk's body. The text is added after two blank lines. Useful for incrementally building up notes, logs, or research.",
   inputSchema: {
-    id: z.number().describe("Chunk ID"),
+    id: z.coerce.number().describe("Chunk ID"),
     text: z.string().describe("Text to append to the chunk body"),
   },
 }, async ({ id, text }) => {
@@ -351,7 +351,7 @@ server.registerTool("delete_queue_item", {
   description:
     "Delete an item from a queue by ID. Use this after successfully processing an item returned by get_next_queue_item.",
   inputSchema: {
-    id: z.number().describe("Queue item ID"),
+    id: z.coerce.number().describe("Queue item ID"),
   },
 }, async ({ id }) => {
   try {

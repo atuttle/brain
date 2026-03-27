@@ -9,6 +9,11 @@ import {
   getChunk,
   updateChunk,
   deleteChunk,
+  listQueues,
+  enqueue,
+  getQueueLength,
+  getNextQueueItem,
+  deleteQueueItem,
 } from "./db.js";
 
 const server = new McpServer({
@@ -204,6 +209,102 @@ server.registerTool("delete_chunk", {
     deleteChunk(id);
     return {
       content: [{ type: "text" as const, text: `Chunk ${id} soft-deleted.` }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+});
+
+// --- list_queues ---
+
+server.registerTool("list_queues", {
+  description:
+    "List all queues with their item counts.",
+}, async () => {
+  const queues = listQueues();
+  if (queues.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: "No queues exist yet. Use enqueue to create one." }],
+    };
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(queues, null, 2) }],
+  };
+});
+
+// --- enqueue ---
+
+server.registerTool("enqueue", {
+  description:
+    "Add items to a queue. The queue is auto-created if it doesn't exist. Items are newline-delimited — one item per line. Blank lines are ignored.",
+  inputSchema: {
+    queue: z.string().describe("Queue name"),
+    items: z.string().describe("Newline-delimited items to add to the queue"),
+  },
+}, async ({ queue, items }) => {
+  const parsed = items.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+  if (parsed.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: "No items to enqueue (input was empty or all blank lines)." }],
+      isError: true,
+    };
+  }
+  const ids = enqueue(queue, parsed);
+  return {
+    content: [{ type: "text" as const, text: `Enqueued ${ids.length} item(s) in "${queue}": ${JSON.stringify(ids)}` }],
+  };
+});
+
+// --- get_queue_length ---
+
+server.registerTool("get_queue_length", {
+  description: "Get the number of items in a queue.",
+  inputSchema: {
+    queue: z.string().describe("Queue name"),
+  },
+}, async ({ queue }) => {
+  const count = getQueueLength(queue);
+  return {
+    content: [{ type: "text" as const, text: String(count) }],
+  };
+});
+
+// --- get_next_queue_item ---
+
+server.registerTool("get_next_queue_item", {
+  description:
+    "Peek at the next item in a queue (FIFO). Returns the item but does not remove it. Call delete_queue_item with the returned ID when done processing.",
+  inputSchema: {
+    queue: z.string().describe("Queue name"),
+  },
+}, async ({ queue }) => {
+  const item = getNextQueueItem(queue);
+  if (!item) {
+    return {
+      content: [{ type: "text" as const, text: `Queue "${queue}" is empty.` }],
+    };
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(item) }],
+  };
+});
+
+// --- delete_queue_item ---
+
+server.registerTool("delete_queue_item", {
+  description:
+    "Delete an item from a queue by ID. Use this after successfully processing an item returned by get_next_queue_item.",
+  inputSchema: {
+    id: z.number().describe("Queue item ID"),
+  },
+}, async ({ id }) => {
+  try {
+    deleteQueueItem(id);
+    return {
+      content: [{ type: "text" as const, text: `Queue item ${id} deleted.` }],
     };
   } catch (e) {
     return {

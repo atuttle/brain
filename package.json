@@ -4,7 +4,7 @@
   "description": "Persistent chunk-based task memory for Claude Code via MCP",
   "type": "module",
   "bin": {
-    "mcp-brain": "./dist/cli.js"
+    "brain": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",

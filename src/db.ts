@@ -43,6 +43,21 @@ function migrate(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_chunks_project_status
       ON chunks(project, status) WHERE deleted_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS queues (
+      name       TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS queue_items (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      queue      TEXT NOT NULL REFERENCES queues(name) ON DELETE CASCADE,
+      value      TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_queue_items_queue
+      ON queue_items(queue, id);
   `);
 }
 
@@ -322,6 +337,108 @@ export function emptyTrash(): number {
   const db = getDb();
   const result = db.prepare("DELETE FROM chunks WHERE deleted_at IS NOT NULL").run();
   return result.changes;
+}
+
+// --- Queue operations ---
+
+export interface Queue {
+  name: string;
+  created_at: string;
+}
+
+export interface QueueItem {
+  id: number;
+  queue: string;
+  value: string;
+  created_at: string;
+}
+
+export interface QueueSummary extends Queue {
+  item_count: number;
+}
+
+export function listQueues(): QueueSummary[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT q.name, q.created_at, COUNT(qi.id) AS item_count
+       FROM queues q
+       LEFT JOIN queue_items qi ON qi.queue = q.name
+       GROUP BY q.name
+       ORDER BY q.name`
+    )
+    .all() as QueueSummary[];
+}
+
+export function getQueueLength(queue: string): number {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT COUNT(*) AS count FROM queue_items WHERE queue = ?")
+    .get(queue) as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+export function enqueue(queue: string, items: string[]): number[] {
+  const db = getDb();
+  const filtered = items.map((s) => s.trim()).filter((s) => s.length > 0);
+  if (filtered.length === 0) return [];
+
+  // Auto-create queue
+  db.prepare(
+    "INSERT OR IGNORE INTO queues (name) VALUES (?)"
+  ).run(queue);
+
+  const stmt = db.prepare(
+    "INSERT INTO queue_items (queue, value) VALUES (?, ?)"
+  );
+
+  const ids: number[] = [];
+  const insertAll = db.transaction(() => {
+    for (const value of filtered) {
+      const result = stmt.run(queue, value);
+      ids.push(Number(result.lastInsertRowid));
+    }
+  });
+
+  insertAll();
+  return ids;
+}
+
+export function getNextQueueItem(queue: string): QueueItem | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      "SELECT * FROM queue_items WHERE queue = ? ORDER BY id ASC LIMIT 1"
+    )
+    .get(queue) as QueueItem | undefined;
+  return row ?? null;
+}
+
+export function listQueueItems(queue: string): QueueItem[] {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM queue_items WHERE queue = ? ORDER BY id ASC")
+    .all(queue) as QueueItem[];
+}
+
+export function deleteQueueItem(id: number): void {
+  const db = getDb();
+  const result = db
+    .prepare("DELETE FROM queue_items WHERE id = ?")
+    .run(id);
+  if (result.changes === 0) throw new Error(`Queue item ${id} not found`);
+}
+
+export function deleteQueue(queue: string): number {
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT name FROM queues WHERE name = ?")
+    .get(queue);
+  if (!existing) throw new Error(`Queue "${queue}" not found`);
+
+  // CASCADE deletes items
+  db.prepare("DELETE FROM queues WHERE name = ?").run(queue);
+  return 1;
 }
 
 export function getDbPath(): string {

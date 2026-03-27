@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { select, confirm } from "@inquirer/prompts";
+import { select, confirm, input } from "@inquirer/prompts";
 import {
   getDb,
   getDbPath,
@@ -12,10 +12,15 @@ import {
   listDeletedChunks,
   restoreChunk,
   emptyTrash,
+  listQueues,
+  enqueue,
+  listQueueItems,
+  deleteQueueItem,
+  deleteQueue,
   type ChunkSummary,
 } from "./db.js";
 import { execSync } from "child_process";
-import { mkdirSync, readdirSync, statSync, unlinkSync } from "fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 
 const BACKUP_DIR = join(dirname(getDbPath()), "backups");
@@ -35,6 +40,7 @@ async function mainMenu(): Promise<void> {
         { name: "View deleted records", value: "trash" },
         { name: "Restore a record", value: "restore" },
         { name: "Empty trash", value: "empty-trash" },
+        { name: "Queues", value: "queues" },
         { name: "Backup database", value: "backup" },
         { name: "Install backup cron", value: "install-cron" },
         { name: "Exit", value: "exit" },
@@ -56,6 +62,9 @@ async function mainMenu(): Promise<void> {
         break;
       case "empty-trash":
         await emptyTrashMenu();
+        break;
+      case "queues":
+        await queuesMenu();
         break;
       case "backup":
         runBackup();
@@ -209,6 +218,185 @@ async function emptyTrashMenu(): Promise<void> {
   console.log(`Permanently deleted ${count} record(s).`);
 }
 
+// --- Queue menus ---
+
+async function queuesMenu(): Promise<void> {
+  const action = await select({
+    message: "Queues",
+    choices: [
+      { name: "List queues", value: "list" },
+      { name: "View queue contents", value: "view" },
+      { name: "Add items to queue", value: "enqueue" },
+      { name: "Delete item from queue", value: "delete-item" },
+      { name: "Delete entire queue", value: "delete-queue" },
+      { name: "← Back", value: "back" },
+    ],
+  });
+
+  switch (action) {
+    case "list":
+      listQueuesMenu();
+      break;
+    case "view":
+      await viewQueueMenu();
+      break;
+    case "enqueue":
+      await enqueueMenu();
+      break;
+    case "delete-item":
+      await deleteQueueItemMenu();
+      break;
+    case "delete-queue":
+      await deleteQueueMenu();
+      break;
+  }
+}
+
+function listQueuesMenu(): void {
+  const queues = listQueues();
+  if (queues.length === 0) {
+    console.log("No queues found.");
+    return;
+  }
+
+  console.log(`\n${queues.length} queue(s):\n`);
+  for (const q of queues) {
+    console.log(`  ${q.name}  (${q.item_count} items)  created: ${q.created_at}`);
+  }
+  console.log();
+}
+
+async function pickQueue(): Promise<string | null> {
+  const queues = listQueues();
+  if (queues.length === 0) {
+    console.log("No queues found.");
+    return null;
+  }
+
+  return select({
+    message: "Select queue",
+    choices: queues.map((q) => ({ name: `${q.name} (${q.item_count} items)`, value: q.name })),
+  });
+}
+
+async function viewQueueMenu(): Promise<void> {
+  const queue = await pickQueue();
+  if (!queue) return;
+
+  const items = listQueueItems(queue);
+  if (items.length === 0) {
+    console.log("Queue is empty.");
+    return;
+  }
+
+  console.log(`\n${items.length} item(s) in "${queue}":\n`);
+  for (const item of items) {
+    console.log(`  #${item.id}  ${item.value}`);
+  }
+  console.log();
+}
+
+async function enqueueMenu(): Promise<void> {
+  const queueName = await input({ message: "Queue name (auto-created if new)" });
+  if (!queueName.trim()) return;
+
+  const mode = await select({
+    message: "Input mode",
+    choices: [
+      { name: "Single item", value: "single" },
+      { name: "Multi-line (paste, then enter empty line to finish)", value: "multi" },
+    ],
+  });
+
+  if (mode === "single") {
+    const value = await input({ message: "Item value" });
+    if (!value.trim()) return;
+    const ids = enqueue(queueName.trim(), [value.trim()]);
+    console.log(`Enqueued 1 item (id: ${ids[0]})`);
+  } else {
+    console.log("Enter items one per line. Empty line to finish:");
+    const lines: string[] = [];
+    while (true) {
+      const line = await input({ message: ">" });
+      if (line.trim() === "") break;
+      lines.push(line.trim());
+    }
+    if (lines.length === 0) {
+      console.log("No items entered.");
+      return;
+    }
+    const ids = enqueue(queueName.trim(), lines);
+    console.log(`Enqueued ${ids.length} item(s).`);
+  }
+}
+
+async function deleteQueueItemMenu(): Promise<void> {
+  const queue = await pickQueue();
+  if (!queue) return;
+
+  const items = listQueueItems(queue);
+  if (items.length === 0) {
+    console.log("Queue is empty.");
+    return;
+  }
+
+  const itemId = await select<number>({
+    message: "Select item to delete",
+    choices: [
+      ...items.map((item) => ({
+        name: `#${item.id}  ${item.value}`,
+        value: item.id,
+      })),
+      { name: "← Back", value: -1 },
+    ],
+  });
+
+  if (itemId === -1) return;
+  deleteQueueItem(itemId);
+  console.log(`Deleted item #${itemId}.`);
+}
+
+async function deleteQueueMenu(): Promise<void> {
+  const queue = await pickQueue();
+  if (!queue) return;
+
+  const items = listQueueItems(queue);
+  const ok = await confirm({
+    message: `Delete queue "${queue}" and its ${items.length} item(s)? This cannot be undone.`,
+  });
+  if (!ok) return;
+
+  deleteQueue(queue);
+  console.log(`Deleted queue "${queue}".`);
+}
+
+// --- Stdin pipe support for enqueue ---
+
+function handleStdinEnqueue(): void {
+  const args = process.argv.slice(2);
+  const queueIdx = args.indexOf("--enqueue");
+  if (queueIdx === -1) return;
+
+  const queueName = args[queueIdx + 1];
+  if (!queueName) {
+    console.error("Usage: mcp-brain --enqueue <queue-name> < items.txt");
+    process.exit(1);
+  }
+
+  getDb();
+  const stdinData = readFileSync(0, "utf-8");
+  const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+
+  if (lines.length === 0) {
+    console.log("No items to enqueue (stdin was empty).");
+    process.exit(0);
+  }
+
+  const ids = enqueue(queueName, lines);
+  console.log(`Enqueued ${ids.length} item(s) in "${queueName}".`);
+  process.exit(0);
+}
+
 function runBackup(): void {
   mkdirSync(BACKUP_DIR, { recursive: true });
   const dbPath = getDbPath();
@@ -302,8 +490,10 @@ async function installCron(): Promise<void> {
   }
 }
 
-// Support --backup flag for cron
-if (process.argv.includes("--backup")) {
+// Support non-interactive flags
+if (process.argv.includes("--enqueue")) {
+  handleStdinEnqueue();
+} else if (process.argv.includes("--backup")) {
   getDb(); // ensure DB exists
   runBackup();
 } else {

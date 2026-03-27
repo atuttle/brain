@@ -19,6 +19,13 @@ import {
   listDeletedChunks,
   restoreChunk,
   emptyTrash,
+  listQueues,
+  enqueue,
+  getQueueLength,
+  getNextQueueItem,
+  listQueueItems,
+  deleteQueueItem,
+  deleteQueue,
 } from "./db.js";
 
 afterAll(() => {
@@ -28,8 +35,14 @@ afterAll(() => {
 // Wipe tables between tests for isolation
 beforeEach(() => {
   const db = getDb();
-  db.exec("DELETE FROM chunks");
-  db.exec("DELETE FROM projects");
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DELETE FROM queue_items;
+    DELETE FROM queues;
+    DELETE FROM chunks;
+    DELETE FROM projects;
+    PRAGMA foreign_keys = ON;
+  `);
 });
 
 // ─── Projects ───────────────────────────────────────────
@@ -318,5 +331,165 @@ describe("transactions", () => {
     const ids = createChunks("p", [{ title: "a" }, { title: "b" }]);
     expect(ids).toHaveLength(2);
     expect(listChunks("p")).toHaveLength(2);
+  });
+});
+
+// ─── Queues ─────────────────────────────────────────────
+
+describe("queues", () => {
+  it("starts with no queues", () => {
+    expect(listQueues()).toEqual([]);
+  });
+
+  it("auto-creates queue on first enqueue", () => {
+    enqueue("q", ["item1"]);
+    const queues = listQueues();
+    expect(queues).toHaveLength(1);
+    expect(queues[0].name).toBe("q");
+    expect(queues[0].item_count).toBe(1);
+  });
+
+  it("enqueue returns item ids", () => {
+    const ids = enqueue("q", ["a", "b", "c"]);
+    expect(ids).toHaveLength(3);
+    expect(ids[0]).toBeLessThan(ids[1]);
+    expect(ids[1]).toBeLessThan(ids[2]);
+  });
+
+  it("enqueue filters blank strings", () => {
+    const ids = enqueue("q", ["a", "", "  ", "b"]);
+    expect(ids).toHaveLength(2);
+    expect(listQueueItems("q").map((i) => i.value)).toEqual(["a", "b"]);
+  });
+
+  it("enqueue with all blanks returns empty array", () => {
+    const ids = enqueue("q", ["", "  "]);
+    expect(ids).toEqual([]);
+    // queue should not be created
+    expect(listQueues()).toEqual([]);
+  });
+
+  it("allows duplicate values", () => {
+    enqueue("q", ["same", "same", "same"]);
+    expect(listQueueItems("q")).toHaveLength(3);
+  });
+
+  it("preserves FIFO order", () => {
+    enqueue("q", ["first", "second", "third"]);
+    const items = listQueueItems("q");
+    expect(items.map((i) => i.value)).toEqual(["first", "second", "third"]);
+  });
+
+  it("appends to existing queue", () => {
+    enqueue("q", ["a"]);
+    enqueue("q", ["b"]);
+    expect(listQueueItems("q").map((i) => i.value)).toEqual(["a", "b"]);
+  });
+});
+
+describe("getQueueLength", () => {
+  it("returns 0 for nonexistent queue", () => {
+    expect(getQueueLength("nope")).toBe(0);
+  });
+
+  it("returns correct count", () => {
+    enqueue("q", ["a", "b", "c"]);
+    expect(getQueueLength("q")).toBe(3);
+  });
+
+  it("updates after delete", () => {
+    const [id] = enqueue("q", ["a", "b"]);
+    deleteQueueItem(id);
+    expect(getQueueLength("q")).toBe(1);
+  });
+});
+
+describe("getNextQueueItem", () => {
+  it("returns null for empty queue", () => {
+    expect(getNextQueueItem("nope")).toBeNull();
+  });
+
+  it("returns the first item (peek, no removal)", () => {
+    enqueue("q", ["first", "second"]);
+    const item1 = getNextQueueItem("q")!;
+    expect(item1.value).toBe("first");
+
+    // calling again returns the same item
+    const item2 = getNextQueueItem("q")!;
+    expect(item2.id).toBe(item1.id);
+  });
+
+  it("advances after deleting the head", () => {
+    enqueue("q", ["first", "second"]);
+    const head = getNextQueueItem("q")!;
+    deleteQueueItem(head.id);
+
+    const next = getNextQueueItem("q")!;
+    expect(next.value).toBe("second");
+  });
+
+  it("returns null after all items deleted", () => {
+    const [id] = enqueue("q", ["only"]);
+    deleteQueueItem(id);
+    expect(getNextQueueItem("q")).toBeNull();
+  });
+});
+
+describe("deleteQueueItem", () => {
+  it("removes an item", () => {
+    const [id] = enqueue("q", ["x"]);
+    deleteQueueItem(id);
+    expect(listQueueItems("q")).toHaveLength(0);
+  });
+
+  it("throws for nonexistent id", () => {
+    expect(() => deleteQueueItem(99999)).toThrow("not found");
+  });
+
+  it("can delete from middle of queue", () => {
+    const [a, b, c] = enqueue("q", ["a", "b", "c"]);
+    deleteQueueItem(b);
+    expect(listQueueItems("q").map((i) => i.value)).toEqual(["a", "c"]);
+  });
+});
+
+describe("deleteQueue", () => {
+  it("deletes queue and all its items", () => {
+    enqueue("q", ["a", "b", "c"]);
+    deleteQueue("q");
+    expect(listQueues()).toEqual([]);
+    expect(listQueueItems("q")).toEqual([]);
+  });
+
+  it("throws for nonexistent queue", () => {
+    expect(() => deleteQueue("nope")).toThrow('Queue "nope" not found');
+  });
+
+  it("does not affect other queues", () => {
+    enqueue("q1", ["a"]);
+    enqueue("q2", ["b"]);
+    deleteQueue("q1");
+    expect(listQueues()).toHaveLength(1);
+    expect(listQueueItems("q2")).toHaveLength(1);
+  });
+});
+
+describe("listQueues", () => {
+  it("includes item counts per queue", () => {
+    enqueue("small", ["a"]);
+    enqueue("big", ["x", "y", "z"]);
+    const queues = listQueues();
+    const small = queues.find((q) => q.name === "small")!;
+    const big = queues.find((q) => q.name === "big")!;
+    expect(small.item_count).toBe(1);
+    expect(big.item_count).toBe(3);
+  });
+
+  it("shows 0 items for empty queue after all deleted", () => {
+    const [id] = enqueue("q", ["a"]);
+    deleteQueueItem(id);
+    const queues = listQueues();
+    expect(queues).toHaveLength(1);
+    expect(queues[0].item_count).toBe(0);
   });
 });

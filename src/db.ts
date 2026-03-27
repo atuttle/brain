@@ -327,3 +327,11 @@ export function emptyTrash(): number {
 export function getDbPath(): string {
   return DB_PATH;
 }
+
+/** Close the database connection (for testing). */
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}

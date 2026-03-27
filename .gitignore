@@ -1,3 +1,4 @@
 dist
 node_modules
 .test-brain.db*
+.pnpm-store/v10

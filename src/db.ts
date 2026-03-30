@@ -58,6 +58,13 @@ function migrate(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_queue_items_queue
       ON queue_items(queue, id);
+
+    CREATE TABLE IF NOT EXISTS sets (
+      name       TEXT NOT NULL,
+      key        TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (name, key)
+    );
   `);
 }
 
@@ -376,8 +383,12 @@ export function restoreChunk(id: number): Chunk {
   return getChunk(id)!;
 }
 
-export function emptyTrash(): number {
+export function emptyTrash(project?: string): number {
   const db = getDb();
+  if (project) {
+    const result = db.prepare("DELETE FROM chunks WHERE deleted_at IS NOT NULL AND project = ?").run(project);
+    return result.changes;
+  }
   const result = db.prepare("DELETE FROM chunks WHERE deleted_at IS NOT NULL").run();
   return result.changes;
 }
@@ -482,6 +493,84 @@ export function deleteQueue(queue: string): number {
   // CASCADE deletes items
   db.prepare("DELETE FROM queues WHERE name = ?").run(queue);
   return 1;
+}
+
+// --- Set operations ---
+
+export interface SetSummary {
+  name: string;
+  member_count: number;
+}
+
+export function listSets(): SetSummary[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT name, COUNT(*) AS member_count
+       FROM sets GROUP BY name ORDER BY name`
+    )
+    .all() as SetSummary[];
+}
+
+export function addToSet(set: string, key: string): void {
+  const db = getDb();
+  db.prepare(
+    "INSERT OR IGNORE INTO sets (name, key) VALUES (?, ?)"
+  ).run(set, key);
+}
+
+export function addManyToSet(set: string, keys: string[]): number {
+  const db = getDb();
+  const filtered = keys.map((s) => s.trim()).filter((s) => s.length > 0);
+  if (filtered.length === 0) return 0;
+
+  const stmt = db.prepare(
+    "INSERT OR IGNORE INTO sets (name, key) VALUES (?, ?)"
+  );
+
+  let added = 0;
+  const insertAll = db.transaction(() => {
+    for (const key of filtered) {
+      const result = stmt.run(set, key);
+      added += result.changes;
+    }
+  });
+
+  insertAll();
+  return added;
+}
+
+export function removeFromSet(set: string, key: string): void {
+  const db = getDb();
+  const result = db
+    .prepare("DELETE FROM sets WHERE name = ? AND key = ?")
+    .run(set, key);
+  if (result.changes === 0) throw new Error(`Key "${key}" not found in set "${set}"`);
+}
+
+export function setHas(set: string, key: string): boolean {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT 1 FROM sets WHERE name = ? AND key = ?")
+    .get(set, key);
+  return row !== undefined;
+}
+
+export function listSetMembers(set: string): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT key FROM sets WHERE name = ? ORDER BY key")
+    .all(set) as { key: string }[];
+  return rows.map((r) => r.key);
+}
+
+export function deleteSet(set: string): number {
+  const db = getDb();
+  const result = db
+    .prepare("DELETE FROM sets WHERE name = ?")
+    .run(set);
+  if (result.changes === 0) throw new Error(`Set "${set}" not found`);
+  return result.changes;
 }
 
 export function getDbPath(): string {

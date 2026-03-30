@@ -16,6 +16,12 @@ import {
   getQueueLength,
   getNextQueueItem,
   deleteQueueItem,
+  listSets,
+  addToSet,
+  removeFromSet,
+  setHas,
+  listSetMembers,
+  deleteSet,
 } from "./db.js";
 
 const server = new McpServer({
@@ -358,6 +364,115 @@ server.registerTool("delete_queue_item", {
     deleteQueueItem(id);
     return {
       content: [{ type: "text" as const, text: `Queue item ${id} deleted.` }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+});
+
+// --- list_sets ---
+
+server.registerTool("list_sets", {
+  description: "List all sets with their member counts.",
+}, async () => {
+  const sets = listSets();
+  if (sets.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: "No sets exist yet. Use add_to_set to create one." }],
+    };
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(sets, null, 2) }],
+  };
+});
+
+// --- add_to_set ---
+
+server.registerTool("add_to_set", {
+  description:
+    "Add a key to a set. The set is auto-created if it doesn't exist. Duplicate keys are silently ignored.",
+  inputSchema: {
+    set: z.string().describe("Set name"),
+    key: z.string().describe("Key to add"),
+  },
+}, async ({ set, key }) => {
+  addToSet(set, key);
+  return {
+    content: [{ type: "text" as const, text: `Added "${key}" to set "${set}".` }],
+  };
+});
+
+// --- remove_from_set ---
+
+server.registerTool("remove_from_set", {
+  description: "Remove a key from a set.",
+  inputSchema: {
+    set: z.string().describe("Set name"),
+    key: z.string().describe("Key to remove"),
+  },
+}, async ({ set, key }) => {
+  try {
+    removeFromSet(set, key);
+    return {
+      content: [{ type: "text" as const, text: `Removed "${key}" from set "${set}".` }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+});
+
+// --- set_has ---
+
+server.registerTool("set_has", {
+  description: "Check if a key exists in a set. Returns true or false.",
+  inputSchema: {
+    set: z.string().describe("Set name"),
+    key: z.string().describe("Key to check"),
+  },
+}, async ({ set, key }) => {
+  const exists = setHas(set, key);
+  return {
+    content: [{ type: "text" as const, text: String(exists) }],
+  };
+});
+
+// --- list_set_members ---
+
+server.registerTool("list_set_members", {
+  description: "List all keys in a set.",
+  inputSchema: {
+    set: z.string().describe("Set name"),
+  },
+}, async ({ set }) => {
+  const members = listSetMembers(set);
+  if (members.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: `Set "${set}" is empty or does not exist.` }],
+    };
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(members) }],
+  };
+});
+
+// --- delete_set ---
+
+server.registerTool("delete_set", {
+  description: "Delete an entire set and all its members.",
+  inputSchema: {
+    set: z.string().describe("Set name"),
+  },
+}, async ({ set }) => {
+  try {
+    const count = deleteSet(set);
+    return {
+      content: [{ type: "text" as const, text: `Deleted set "${set}" (${count} member(s)).` }],
     };
   } catch (e) {
     return {

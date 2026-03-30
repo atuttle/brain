@@ -24,6 +24,13 @@ import {
   listQueueItems,
   deleteQueueItem,
   deleteQueue,
+  listSets,
+  addToSet,
+  addManyToSet,
+  removeFromSet,
+  setHas,
+  listSetMembers,
+  deleteSet,
 } from "./db.js";
 
 afterAll(() => {
@@ -35,6 +42,7 @@ beforeEach(() => {
   const db = getDb();
   db.exec(`
     PRAGMA foreign_keys = OFF;
+    DELETE FROM sets;
     DELETE FROM queue_items;
     DELETE FROM queues;
     DELETE FROM chunks;
@@ -631,5 +639,118 @@ describe("listQueues", () => {
     const queues = listQueues();
     expect(queues).toHaveLength(1);
     expect(queues[0].item_count).toBe(0);
+  });
+});
+
+// ─── Sets ──────────────────────────────────────────────
+
+describe("sets", () => {
+  it("starts with no sets", () => {
+    expect(listSets()).toEqual([]);
+  });
+
+  it("addToSet creates set implicitly", () => {
+    addToSet("s", "key1");
+    expect(setHas("s", "key1")).toBe(true);
+    expect(listSets()).toHaveLength(1);
+    expect(listSets()[0].name).toBe("s");
+    expect(listSets()[0].member_count).toBe(1);
+  });
+
+  it("addToSet ignores duplicate keys", () => {
+    addToSet("s", "key1");
+    addToSet("s", "key1");
+    expect(listSetMembers("s")).toEqual(["key1"]);
+  });
+
+  it("setHas returns false for nonexistent key", () => {
+    expect(setHas("s", "nope")).toBe(false);
+  });
+
+  it("setHas returns false for nonexistent set", () => {
+    expect(setHas("nope", "nope")).toBe(false);
+  });
+
+  it("listSetMembers returns sorted keys", () => {
+    addToSet("s", "banana");
+    addToSet("s", "apple");
+    addToSet("s", "cherry");
+    expect(listSetMembers("s")).toEqual(["apple", "banana", "cherry"]);
+  });
+
+  it("listSetMembers returns empty for nonexistent set", () => {
+    expect(listSetMembers("nope")).toEqual([]);
+  });
+
+  it("removeFromSet removes a key", () => {
+    addToSet("s", "a");
+    addToSet("s", "b");
+    removeFromSet("s", "a");
+    expect(setHas("s", "a")).toBe(false);
+    expect(setHas("s", "b")).toBe(true);
+  });
+
+  it("removeFromSet throws for nonexistent key", () => {
+    addToSet("s", "a");
+    expect(() => removeFromSet("s", "nope")).toThrow('Key "nope" not found in set "s"');
+  });
+
+  it("deleteSet removes all members", () => {
+    addToSet("s", "a");
+    addToSet("s", "b");
+    addToSet("s", "c");
+    const count = deleteSet("s");
+    expect(count).toBe(3);
+    expect(listSets()).toEqual([]);
+    expect(listSetMembers("s")).toEqual([]);
+  });
+
+  it("deleteSet throws for nonexistent set", () => {
+    expect(() => deleteSet("nope")).toThrow('Set "nope" not found');
+  });
+
+  it("sets are independent of each other", () => {
+    addToSet("s1", "shared-key");
+    addToSet("s2", "shared-key");
+    deleteSet("s1");
+    expect(setHas("s2", "shared-key")).toBe(true);
+  });
+});
+
+describe("addManyToSet", () => {
+  it("adds multiple keys in one call", () => {
+    const added = addManyToSet("s", ["a", "b", "c"]);
+    expect(added).toBe(3);
+    expect(listSetMembers("s")).toEqual(["a", "b", "c"]);
+  });
+
+  it("skips blank strings", () => {
+    const added = addManyToSet("s", ["a", "", "  ", "b"]);
+    expect(added).toBe(2);
+    expect(listSetMembers("s")).toEqual(["a", "b"]);
+  });
+
+  it("returns 0 for all-blank input", () => {
+    const added = addManyToSet("s", ["", "  "]);
+    expect(added).toBe(0);
+  });
+
+  it("reports how many were actually new", () => {
+    addToSet("s", "a");
+    const added = addManyToSet("s", ["a", "b", "c"]);
+    expect(added).toBe(2);
+    expect(listSetMembers("s")).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("listSets", () => {
+  it("shows member counts per set", () => {
+    addToSet("small", "x");
+    addManyToSet("big", ["a", "b", "c"]);
+    const sets = listSets();
+    const small = sets.find((s) => s.name === "small")!;
+    const big = sets.find((s) => s.name === "big")!;
+    expect(small.member_count).toBe(1);
+    expect(big.member_count).toBe(3);
   });
 });

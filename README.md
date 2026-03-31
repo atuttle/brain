@@ -1,6 +1,10 @@
 # brain
 
-Persistent task memory and work queues for Claude Code via MCP.
+Persistent SQLite store that gives Claude Code projects, work queues, and sets — accessible via MCP tools and a scriptable CLI.
+
+- **Projects & Tasks** — organize work into projects with custom lifecycle states (e.g. pending → active → done)
+- **Queues** — FIFO work queues for processing items in order (peek, process, delete)
+- **Sets** — track membership for filtering and deduplication (e.g. reviewed files, known bugs)
 
 ## Install
 

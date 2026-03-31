@@ -6,6 +6,10 @@ Persistent SQLite store that gives Claude Code projects, work queues, and sets �
 - **Queues** — FIFO work queues for processing items in order (peek, process, delete)
 - **Sets** — track membership for filtering and deduplication (e.g. reviewed files, known bugs)
 
+## Why?
+
+I used to track this kind of information in uncommitted files in a hidden folder. Then Claude decided to delete a bunch of those files one too many times, with no way to get them back. I needed a way to give Claude structured access to persistent data without giving it the ability to destroy that data. The MCP tools here are read/write but deletes are soft — the only way to permanently remove anything is through the CLI, where I'm always in the loop.
+
 ## Install
 
 ```bash

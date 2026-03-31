@@ -31,10 +31,20 @@ import {
   type TaskSummary,
 } from "./db.js";
 import { execSync } from "child_process";
-import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "fs";
+import { mkdirSync, readdirSync, statSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 
 const BACKUP_DIR = join(dirname(getDbPath()), "backups");
+
+function readStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const parts: string[] = [];
+    process.stdin.setEncoding("utf-8");
+    process.stdin.on("data", (chunk: string) => parts.push(chunk));
+    process.stdin.on("end", () => resolve(parts.join("")));
+    process.stdin.on("error", reject);
+  });
+}
 
 // ─── Commander setup ────────────────────────────────────
 
@@ -231,9 +241,9 @@ queue
   .command("add")
   .description("Enqueue items from stdin (one per line)")
   .argument("<queue>", "queue name (auto-created if new)")
-  .action((queueName: string) => {
+  .action(async (queueName: string) => {
     getDb();
-    const stdinData = readFileSync(0, "utf-8");
+    const stdinData = await readStdin();
     const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
     if (lines.length === 0) {
       console.log("No items to enqueue (stdin was empty).");
@@ -329,13 +339,13 @@ set
   .description("Add keys to a set from stdin or --key")
   .argument("<set>", "set name (auto-created if new)")
   .option("--key <key>", "single key to add (instead of stdin)")
-  .action((setName: string, opts: { key?: string }) => {
+  .action(async (setName: string, opts: { key?: string }) => {
     getDb();
     if (opts.key) {
       addToSet(setName, opts.key);
       console.log(`Added "${opts.key}" to set "${setName}".`);
     } else {
-      const stdinData = readFileSync(0, "utf-8");
+      const stdinData = await readStdin();
       const keys = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
       if (keys.length === 0) {
         console.log("No keys to add (stdin was empty).");
@@ -381,9 +391,9 @@ set
   .command("in")
   .description("Filter stdin to lines that are members of the set")
   .argument("<set>", "set name")
-  .action((setName: string) => {
+  .action(async (setName: string) => {
     getDb();
-    const stdinData = readFileSync(0, "utf-8");
+    const stdinData = await readStdin();
     const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
     for (const line of lines) {
       if (setHas(setName, line)) {
@@ -396,9 +406,9 @@ set
   .command("not-in")
   .description("Filter stdin to lines that are NOT members of the set")
   .argument("<set>", "set name")
-  .action((setName: string) => {
+  .action(async (setName: string) => {
     getDb();
-    const stdinData = readFileSync(0, "utf-8");
+    const stdinData = await readStdin();
     const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
     for (const line of lines) {
       if (!setHas(setName, line)) {

@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 
+import { Command } from "commander";
 import { intro, outro, select, confirm, text, isCancel, cancel, log } from "@clack/prompts";
 import {
   getDb,
   getDbPath,
   listProjectDetails,
   getProject,
-  listChunks,
-  getChunk,
-  searchChunks,
-  listDeletedChunks,
-  restoreChunk,
+  listTasks,
+  getTask,
+  searchTasks,
+  listDeletedTasks,
+  restoreTask,
   emptyTrash,
   listQueues,
   enqueue,
@@ -25,7 +26,7 @@ import {
   listSetMembers,
   listSets,
   deleteSet,
-  type ChunkSummary,
+  type TaskSummary,
 } from "./db.js";
 import { execSync } from "child_process";
 import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "fs";
@@ -33,8 +34,479 @@ import { dirname, join } from "path";
 
 const BACKUP_DIR = join(dirname(getDbPath()), "backups");
 
-function formatChunk(c: ChunkSummary): string {
-  return `[${c.sequence || "-"}] #${c.id} (${c.status}) ${c.title}`;
+// ─── Commander setup ────────────────────────────────────
+
+const program = new Command("brain")
+  .description("Persistent task memory and work queues for Claude Code")
+  .version("1.0.0")
+  .action(() => {
+    // bare `brain` → interactive TUI
+    mainMenu().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+  });
+
+// ─── brain project ──────────────────────────────────────
+
+const project = program
+  .command("project")
+  .description("Manage projects and tasks");
+
+project
+  .command("list")
+  .description("List projects, or list tasks in a project")
+  .argument("[project]", "project name — omit to list all projects")
+  .option("--status <status>", "filter tasks by status")
+  .action((proj: string | undefined, opts: { status?: string }) => {
+    getDb();
+    if (!proj) {
+      const projects = listProjectDetails();
+      if (projects.length === 0) {
+        console.log("No projects found.");
+        return;
+      }
+      for (const p of projects) {
+        console.log(`${p.name}\t${p.task_count}`);
+      }
+    } else {
+      const tasks = listTasks(proj, opts.status);
+      if (tasks.length === 0) {
+        console.log("No tasks found.");
+        return;
+      }
+      for (const t of tasks) {
+        console.log(`${t.id}\t${t.status}\t${t.sequence || ""}\t${t.title}`);
+      }
+    }
+  });
+
+project
+  .command("get-task")
+  .description("Get full task content as JSON")
+  .argument("<id>", "task ID")
+  .action((rawId: string) => {
+    getDb();
+    const id = Number(rawId);
+    if (!Number.isInteger(id)) {
+      console.error("Invalid task ID.");
+      process.exit(1);
+    }
+    const task = getTask(id);
+    if (!task) {
+      console.error("Task not found.");
+      process.exit(1);
+    }
+    console.log(JSON.stringify(task));
+  });
+
+project
+  .command("search")
+  .description("Full-text search across tasks")
+  .argument("<query...>", "search terms")
+  .option("--project <project>", "limit to a specific project")
+  .option("--status <status>", "limit to a specific status")
+  .action((queryParts: string[], opts: { project?: string; status?: string }) => {
+    getDb();
+    const query = queryParts.join(" ");
+    const results = searchTasks(query, opts.project, opts.status);
+    if (results.length === 0) {
+      console.log("No matching tasks.");
+      return;
+    }
+    for (const t of results) {
+      console.log(`${t.id}\t${t.project}\t${t.status}\t${t.title}`);
+    }
+  });
+
+project
+  .command("list-deleted")
+  .description("List soft-deleted tasks")
+  .argument("[project]", "limit to a specific project")
+  .action((proj: string | undefined) => {
+    getDb();
+    const deleted = listDeletedTasks(proj);
+    if (deleted.length === 0) {
+      console.log("Trash is empty.");
+      return;
+    }
+    for (const t of deleted) {
+      console.log(`${t.id}\t${t.project}\t${t.title}\t${t.deleted_at}`);
+    }
+  });
+
+project
+  .command("restore-task")
+  .description("Restore a soft-deleted task")
+  .argument("<id>", "task ID")
+  .action((rawId: string) => {
+    getDb();
+    const id = Number(rawId);
+    if (!Number.isInteger(id)) {
+      console.error("Invalid task ID.");
+      process.exit(1);
+    }
+    try {
+      const restored = restoreTask(id);
+      console.log(`Restored task #${restored.id}: ${restored.title}`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+project
+  .command("empty-trash")
+  .description("Permanently delete all trashed tasks")
+  .argument("[project]", "limit to a specific project")
+  .action((proj: string | undefined) => {
+    getDb();
+    const count = emptyTrash(proj);
+    console.log(`Permanently deleted ${count} task(s).`);
+  });
+
+// ─── brain queue ────────────────────────────────────────
+
+const queue = program
+  .command("queue")
+  .description("Manage work queues");
+
+queue
+  .command("list")
+  .description("List all queues with item counts")
+  .action(() => {
+    getDb();
+    const queues = listQueues();
+    if (queues.length === 0) {
+      console.log("No queues found.");
+      return;
+    }
+    for (const q of queues) {
+      console.log(`${q.name}\t${q.item_count}`);
+    }
+  });
+
+queue
+  .command("items")
+  .description("List all items in a queue")
+  .argument("<queue>", "queue name")
+  .action((queueName: string) => {
+    getDb();
+    const items = listQueueItems(queueName);
+    if (items.length === 0) {
+      console.log("Queue is empty.");
+      return;
+    }
+    for (const item of items) {
+      console.log(`${item.id}\t${item.value}`);
+    }
+  });
+
+queue
+  .command("add")
+  .description("Enqueue items from stdin (one per line)")
+  .argument("<queue>", "queue name (auto-created if new)")
+  .action((queueName: string) => {
+    getDb();
+    const stdinData = readFileSync(0, "utf-8");
+    const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+    if (lines.length === 0) {
+      console.log("No items to enqueue (stdin was empty).");
+      return;
+    }
+    const ids = enqueue(queueName, lines);
+    console.log(`Enqueued ${ids.length} item(s) in "${queueName}".`);
+  });
+
+queue
+  .command("next")
+  .description("Peek at the next FIFO item without removing it")
+  .argument("<queue>", "queue name")
+  .action((queueName: string) => {
+    getDb();
+    const item = getNextQueueItem(queueName);
+    if (!item) {
+      process.exit(1);
+    }
+    console.log(`${item.id}\t${item.value}`);
+  });
+
+queue
+  .command("delete-item")
+  .description("Delete a queue item by ID (call after processing)")
+  .argument("<id>", "queue item ID")
+  .action((rawId: string) => {
+    getDb();
+    const id = Number(rawId);
+    if (!Number.isInteger(id)) {
+      console.error("Invalid item ID.");
+      process.exit(1);
+    }
+    try {
+      deleteQueueItem(id);
+      console.log(`Deleted queue item #${id}.`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+queue
+  .command("delete")
+  .description("Delete an entire queue and all its items")
+  .argument("<queue>", "queue name")
+  .action((queueName: string) => {
+    getDb();
+    try {
+      deleteQueue(queueName);
+      console.log(`Deleted queue "${queueName}".`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+// ─── brain set ──────────────────────────────────────────
+
+const set = program
+  .command("set")
+  .description("Manage sets");
+
+set
+  .command("list")
+  .description("List all sets with member counts")
+  .action(() => {
+    getDb();
+    const sets = listSets();
+    if (sets.length === 0) {
+      console.log("No sets found.");
+      return;
+    }
+    for (const s of sets) {
+      console.log(`${s.name}\t${s.member_count}`);
+    }
+  });
+
+set
+  .command("members")
+  .description("List all keys in a set")
+  .argument("<set>", "set name")
+  .action((setName: string) => {
+    getDb();
+    const members = listSetMembers(setName);
+    for (const m of members) {
+      process.stdout.write(m + "\n");
+    }
+  });
+
+set
+  .command("add")
+  .description("Add keys to a set from stdin or --key")
+  .argument("<set>", "set name (auto-created if new)")
+  .option("--key <key>", "single key to add (instead of stdin)")
+  .action((setName: string, opts: { key?: string }) => {
+    getDb();
+    if (opts.key) {
+      addToSet(setName, opts.key);
+      console.log(`Added "${opts.key}" to set "${setName}".`);
+    } else {
+      const stdinData = readFileSync(0, "utf-8");
+      const keys = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+      if (keys.length === 0) {
+        console.log("No keys to add (stdin was empty).");
+        return;
+      }
+      const added = addManyToSet(setName, keys);
+      console.log(`Added ${added} key(s) to set "${setName}" (${keys.length - added} already existed).`);
+    }
+  });
+
+set
+  .command("remove")
+  .description("Remove a key from a set")
+  .argument("<set>", "set name")
+  .requiredOption("--key <key>", "key to remove")
+  .action((setName: string, opts: { key: string }) => {
+    getDb();
+    try {
+      removeFromSet(setName, opts.key);
+      console.log(`Removed "${opts.key}" from set "${setName}".`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+set
+  .command("has")
+  .description("Check if a key exists in a set (exit 0=yes, 1=no)")
+  .argument("<set>", "set name")
+  .requiredOption("--key <key>", "key to check")
+  .action((setName: string, opts: { key: string }) => {
+    getDb();
+    if (setHas(setName, opts.key)) {
+      console.log("true");
+    } else {
+      console.log("false");
+      process.exit(1);
+    }
+  });
+
+set
+  .command("in")
+  .description("Filter stdin to lines that are members of the set")
+  .argument("<set>", "set name")
+  .action((setName: string) => {
+    getDb();
+    const stdinData = readFileSync(0, "utf-8");
+    const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+    for (const line of lines) {
+      if (setHas(setName, line)) {
+        process.stdout.write(line + "\n");
+      }
+    }
+  });
+
+set
+  .command("not-in")
+  .description("Filter stdin to lines that are NOT members of the set")
+  .argument("<set>", "set name")
+  .action((setName: string) => {
+    getDb();
+    const stdinData = readFileSync(0, "utf-8");
+    const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+    for (const line of lines) {
+      if (!setHas(setName, line)) {
+        process.stdout.write(line + "\n");
+      }
+    }
+  });
+
+set
+  .command("delete")
+  .description("Delete an entire set and all its members")
+  .argument("<set>", "set name")
+  .action((setName: string) => {
+    getDb();
+    try {
+      const count = deleteSet(setName);
+      console.log(`Deleted set "${setName}" (${count} member(s)).`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+// ─── brain backup ───────────────────────────────────────
+
+const backup = program
+  .command("backup")
+  .description("Create a database backup")
+  .action(() => {
+    getDb();
+    runBackup();
+  });
+
+backup
+  .command("install-cron")
+  .description("Install an hourly backup cron job")
+  .action(() => {
+    const nodePath = process.execPath;
+    const cliPath = process.argv[1];
+    const cronLine = `0 * * * * "${nodePath}" "${cliPath}" backup`;
+
+    try {
+      const existing = execSync("crontab -l 2>/dev/null", {
+        encoding: "utf-8",
+      }).trim();
+
+      if (existing.includes("brain")) {
+        console.log("Cron job already installed.");
+        return;
+      }
+
+      const newCrontab = existing ? `${existing}\n${cronLine}\n` : `${cronLine}\n`;
+      execSync(`echo "${newCrontab.replace(/"/g, '\\"')}" | crontab -`, {
+        stdio: "pipe",
+      });
+      console.log("Cron job installed: hourly backup.");
+    } catch {
+      console.error("Failed to install cron. Add manually:");
+      console.error(`  ${cronLine}`);
+      process.exit(1);
+    }
+  });
+
+// ─── Parse ──────────────────────────────────────────────
+
+program.parse();
+
+// ─── Helpers ────────────────────────────────────────────
+
+function runBackup(): void {
+  mkdirSync(BACKUP_DIR, { recursive: true });
+  const dbPath = getDbPath();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const backupPath = join(BACKUP_DIR, `brain-${timestamp}.db`);
+
+  try {
+    execSync(`sqlite3 "${dbPath}" ".backup '${backupPath}'"`, { stdio: "pipe" });
+    console.log(backupPath);
+    cleanOldBackups();
+  } catch {
+    console.error("Backup failed. Is sqlite3 installed?");
+    process.exit(1);
+  }
+}
+
+function cleanOldBackups(): void {
+  const files = readdirSync(BACKUP_DIR)
+    .filter((f) => f.startsWith("brain-") && f.endsWith(".db"))
+    .map((f) => ({
+      name: f,
+      path: join(BACKUP_DIR, f),
+      mtime: statSync(join(BACKUP_DIR, f)).mtimeMs,
+    }))
+    .sort((a, b) => b.mtime - a.mtime);
+
+  const now = Date.now();
+  const hourMs = 3600_000;
+  const dayMs = 86400_000;
+
+  const keep = new Set<string>();
+  const seenDays = new Set<string>();
+
+  for (const f of files) {
+    const ageMs = now - f.mtime;
+
+    if (ageMs < 48 * hourMs) {
+      keep.add(f.name);
+    } else if (ageMs < 30 * dayMs) {
+      const day = new Date(f.mtime).toISOString().slice(0, 10);
+      if (!seenDays.has(day)) {
+        seenDays.add(day);
+        keep.add(f.name);
+      }
+    }
+  }
+
+  let removed = 0;
+  for (const f of files) {
+    if (!keep.has(f.name)) {
+      unlinkSync(f.path);
+      removed++;
+    }
+  }
+
+  if (removed > 0) {
+    console.error(`Cleaned ${removed} old backup(s).`);
+  }
+}
+
+// ─── Interactive TUI ────────────────────────────────────
+
+function formatTask(t: TaskSummary): string {
+  return `[${t.sequence || "-"}] #${t.id} (${t.status}) ${t.title}`;
 }
 
 function bail(value: unknown): value is symbol {
@@ -46,7 +518,7 @@ function bail(value: unknown): value is symbol {
 }
 
 async function mainMenu(): Promise<void> {
-  intro("mcp-brain");
+  intro("brain");
 
   while (true) {
     const action = await select({
@@ -80,7 +552,7 @@ async function mainMenu(): Promise<void> {
         runBackup();
         break;
       case "install-cron":
-        await installCron();
+        await installCronInteractive();
         break;
       case "exit":
         outro("Bye.");
@@ -100,7 +572,7 @@ async function projectsMenu(): Promise<void> {
     message: "Select project",
     options: [
       ...details.map((p) => ({
-        label: `${p.name}  (${p.chunk_count} records)`,
+        label: `${p.name}  (${p.task_count} tasks)`,
         value: p.name,
       })),
       { label: "← Back", value: "" },
@@ -109,21 +581,21 @@ async function projectsMenu(): Promise<void> {
   if (bail(choice)) return;
   if (!choice) return;
 
-  await projectMenu(choice);
+  await projectMenuInteractive(choice);
 }
 
-async function projectMenu(project: string): Promise<void> {
-  const proj = getProject(project);
+async function projectMenuInteractive(projectName: string): Promise<void> {
+  const proj = getProject(projectName);
   if (!proj) return;
 
   while (true) {
     const action = await select({
-      message: `${project}`,
+      message: `${projectName}`,
       options: [
-        { label: "Browse records", value: "browse" },
-        { label: "Search records", value: "search" },
-        { label: "View deleted records", value: "trash" },
-        { label: "Restore a record", value: "restore" },
+        { label: "Browse tasks", value: "browse" },
+        { label: "Search tasks", value: "search" },
+        { label: "View deleted tasks", value: "trash" },
+        { label: "Restore a task", value: "restore" },
         { label: "Empty trash", value: "empty-trash" },
         { label: "← Back", value: "back" },
       ],
@@ -132,19 +604,19 @@ async function projectMenu(project: string): Promise<void> {
 
     switch (action) {
       case "browse":
-        await browseChunks(project, proj);
+        await browseTasks(projectName, proj);
         break;
       case "search":
-        await searchMenu(project);
+        await searchMenuInteractive(projectName);
         break;
       case "trash":
-        await viewTrash(project);
+        await viewTrash(projectName);
         break;
       case "restore":
-        await restoreMenu(project);
+        await restoreMenuInteractive(projectName);
         break;
       case "empty-trash":
-        await emptyTrashMenu(project);
+        await emptyTrashMenuInteractive(projectName);
         break;
       case "back":
         return;
@@ -152,7 +624,7 @@ async function projectMenu(project: string): Promise<void> {
   }
 }
 
-async function browseChunks(project: string, proj: import("./db.js").Project): Promise<void> {
+async function browseTasks(projectName: string, proj: import("./db.js").Project): Promise<void> {
   const statusFilter = await select({
     message: "Filter by status",
     options: [
@@ -162,31 +634,31 @@ async function browseChunks(project: string, proj: import("./db.js").Project): P
   });
   if (bail(statusFilter)) return;
 
-  const chunks = listChunks(project, statusFilter || undefined);
-  if (chunks.length === 0) {
-    log.info("No records found.");
+  const tasks = listTasks(projectName, statusFilter || undefined);
+  if (tasks.length === 0) {
+    log.info("No tasks found.");
     return;
   }
 
-  log.info(`${chunks.length} record(s):`);
+  log.info(`${tasks.length} task(s):`);
 
-  const chunkChoice = await select({
-    message: "Select record to view",
+  const taskChoice = await select({
+    message: "Select task to view",
     options: [
-      ...chunks.map((c) => ({
-        label: formatChunk(c),
-        value: c.id,
+      ...tasks.map((t) => ({
+        label: formatTask(t),
+        value: t.id,
       })),
       { label: "← Back", value: -1 as number },
     ],
   });
-  if (bail(chunkChoice)) return;
+  if (bail(taskChoice)) return;
 
-  if (chunkChoice === -1) return;
+  if (taskChoice === -1) return;
 
-  const full = getChunk(chunkChoice);
+  const full = getTask(taskChoice);
   if (!full) {
-    log.error("Record not found.");
+    log.error("Task not found.");
     return;
   }
 
@@ -198,122 +670,98 @@ async function browseChunks(project: string, proj: import("./db.js").Project): P
   log.info(`${"─".repeat(60)}`);
 }
 
-async function searchMenu(project: string): Promise<void> {
+async function searchMenuInteractive(projectName: string): Promise<void> {
   const query = await text({ message: "Search query" });
   if (bail(query)) return;
   if (!query.trim()) return;
 
-  const results = searchChunks(query.trim(), project);
+  const results = searchTasks(query.trim(), projectName);
   if (results.length === 0) {
-    log.info("No matching records.");
+    log.info("No matching tasks.");
     return;
   }
 
   log.info(`${results.length} result(s):`);
-  log.message(results.map((c) => `  #${c.id} (${c.status}) ${c.title}`).join("\n"));
+  log.message(results.map((t) => `  #${t.id} (${t.status}) ${t.title}`).join("\n"));
 }
 
-function handleSearch(): void {
-  const args = process.argv.slice(2);
-  const searchIdx = args.indexOf("--search");
-  if (searchIdx === -1) return;
-
-  const query = args.slice(searchIdx + 1).join(" ");
-  if (!query) {
-    console.error("Usage: mcp-brain --search <query>");
-    process.exit(1);
-  }
-
-  getDb();
-  const results = searchChunks(query);
-  if (results.length === 0) {
-    console.log("No matching records.");
-    process.exit(0);
-  }
-
-  for (const c of results) {
-    console.log(`${c.id}\t${c.project}\t${c.status}\t${c.title}`);
-  }
-  process.exit(0);
-}
-
-async function viewTrash(project: string): Promise<void> {
-  const deleted = listDeletedChunks(project);
+async function viewTrash(projectName: string): Promise<void> {
+  const deleted = listDeletedTasks(projectName);
   if (deleted.length === 0) {
     log.info("Trash is empty.");
     return;
   }
 
-  log.info(`${deleted.length} deleted record(s):`);
-  log.message(deleted.map((c) => `  #${c.id} ${c.title} — deleted ${c.deleted_at}`).join("\n"));
+  log.info(`${deleted.length} deleted task(s):`);
+  log.message(deleted.map((t) => `  #${t.id} ${t.title} — deleted ${t.deleted_at}`).join("\n"));
 }
 
-async function restoreMenu(project: string): Promise<void> {
-  const deleted = listDeletedChunks(project);
+async function restoreMenuInteractive(projectName: string): Promise<void> {
+  const deleted = listDeletedTasks(projectName);
   if (deleted.length === 0) {
     log.info("Trash is empty.");
     return;
   }
 
-  const chunkId = await select({
-    message: "Select record to restore",
+  const taskId = await select({
+    message: "Select task to restore",
     options: [
-      ...deleted.map((c) => ({
-        label: `#${c.id} ${c.title} — deleted ${c.deleted_at}`,
-        value: c.id,
+      ...deleted.map((t) => ({
+        label: `#${t.id} ${t.title} — deleted ${t.deleted_at}`,
+        value: t.id,
       })),
       { label: "← Back", value: -1 as number },
     ],
   });
-  if (bail(chunkId)) return;
+  if (bail(taskId)) return;
 
-  if (chunkId === -1) return;
+  if (taskId === -1) return;
 
-  const restored = restoreChunk(chunkId);
-  log.success(`Restored record #${restored.id}: ${restored.title}`);
+  const restored = restoreTask(taskId);
+  log.success(`Restored task #${restored.id}: ${restored.title}`);
 }
 
-async function emptyTrashMenu(project: string): Promise<void> {
-  const deleted = listDeletedChunks(project);
+async function emptyTrashMenuInteractive(projectName: string): Promise<void> {
+  const deleted = listDeletedTasks(projectName);
   if (deleted.length === 0) {
     log.info("Trash is empty.");
     return;
   }
 
-  log.info(`${deleted.length} record(s) in trash:`);
-  log.message(deleted.map((c) => `  #${c.id} ${c.title} — deleted ${c.deleted_at}`).join("\n"));
+  log.info(`${deleted.length} task(s) in trash:`);
+  log.message(deleted.map((t) => `  #${t.id} ${t.title} — deleted ${t.deleted_at}`).join("\n"));
 
   const ok = await confirm({
-    message: `Permanently delete ${deleted.length} record(s)? This cannot be undone.`,
+    message: `Permanently delete ${deleted.length} task(s)? This cannot be undone.`,
   });
   if (bail(ok)) return;
   if (!ok) return;
 
-  const count = emptyTrash(project);
-  log.success(`Permanently deleted ${count} record(s).`);
+  const count = emptyTrash(projectName);
+  log.success(`Permanently deleted ${count} task(s).`);
 }
 
 async function globalEmptyTrashMenu(): Promise<void> {
-  const deleted = listDeletedChunks();
+  const deleted = listDeletedTasks();
   if (deleted.length === 0) {
     log.info("Trash is empty.");
     return;
   }
 
-  log.info(`${deleted.length} record(s) in trash:`);
-  log.message(deleted.map((c) => `  #${c.id} [${c.project}] ${c.title} — deleted ${c.deleted_at}`).join("\n"));
+  log.info(`${deleted.length} task(s) in trash:`);
+  log.message(deleted.map((t) => `  #${t.id} [${t.project}] ${t.title} — deleted ${t.deleted_at}`).join("\n"));
 
   const ok = await confirm({
-    message: `Permanently delete ${deleted.length} record(s) across all projects? This cannot be undone.`,
+    message: `Permanently delete ${deleted.length} task(s) across all projects? This cannot be undone.`,
   });
   if (bail(ok)) return;
   if (!ok) return;
 
   const count = emptyTrash();
-  log.success(`Permanently deleted ${count} record(s).`);
+  log.success(`Permanently deleted ${count} task(s).`);
 }
 
-// --- Queue menus ---
+// --- Queue interactive menus ---
 
 async function queuesMenu(): Promise<void> {
   const action = await select({
@@ -331,24 +779,24 @@ async function queuesMenu(): Promise<void> {
 
   switch (action) {
     case "list":
-      listQueuesMenu();
+      listQueuesInteractive();
       break;
     case "view":
       await viewQueueMenu();
       break;
     case "enqueue":
-      await enqueueMenu();
+      await enqueueMenuInteractive();
       break;
     case "delete-item":
-      await deleteQueueItemMenu();
+      await deleteQueueItemMenuInteractive();
       break;
     case "delete-queue":
-      await deleteQueueMenu();
+      await deleteQueueMenuInteractive();
       break;
   }
 }
 
-function listQueuesMenu(): void {
+function listQueuesInteractive(): void {
   const queues = listQueues();
   if (queues.length === 0) {
     log.info("No queues found.");
@@ -375,20 +823,20 @@ async function pickQueue(): Promise<string | null> {
 }
 
 async function viewQueueMenu(): Promise<void> {
-  const queue = await pickQueue();
-  if (!queue) return;
+  const queueName = await pickQueue();
+  if (!queueName) return;
 
-  const items = listQueueItems(queue);
+  const items = listQueueItems(queueName);
   if (items.length === 0) {
     log.info("Queue is empty.");
     return;
   }
 
-  log.info(`${items.length} item(s) in "${queue}":`);
+  log.info(`${items.length} item(s) in "${queueName}":`);
   log.message(items.map((item) => `  #${item.id}  ${item.value}`).join("\n"));
 }
 
-async function enqueueMenu(): Promise<void> {
+async function enqueueMenuInteractive(): Promise<void> {
   const queueName = await text({ message: "Queue name (auto-created if new)" });
   if (bail(queueName)) return;
   if (!queueName.trim()) return;
@@ -426,11 +874,11 @@ async function enqueueMenu(): Promise<void> {
   }
 }
 
-async function deleteQueueItemMenu(): Promise<void> {
-  const queue = await pickQueue();
-  if (!queue) return;
+async function deleteQueueItemMenuInteractive(): Promise<void> {
+  const queueName = await pickQueue();
+  if (!queueName) return;
 
-  const items = listQueueItems(queue);
+  const items = listQueueItems(queueName);
   if (items.length === 0) {
     log.info("Queue is empty.");
     return;
@@ -453,144 +901,22 @@ async function deleteQueueItemMenu(): Promise<void> {
   log.success(`Deleted item #${itemId}.`);
 }
 
-async function deleteQueueMenu(): Promise<void> {
-  const queue = await pickQueue();
-  if (!queue) return;
+async function deleteQueueMenuInteractive(): Promise<void> {
+  const queueName = await pickQueue();
+  if (!queueName) return;
 
-  const items = listQueueItems(queue);
+  const items = listQueueItems(queueName);
   const ok = await confirm({
-    message: `Delete queue "${queue}" and its ${items.length} item(s)? This cannot be undone.`,
+    message: `Delete queue "${queueName}" and its ${items.length} item(s)? This cannot be undone.`,
   });
   if (bail(ok)) return;
   if (!ok) return;
 
-  deleteQueue(queue);
-  log.success(`Deleted queue "${queue}".`);
+  deleteQueue(queueName);
+  log.success(`Deleted queue "${queueName}".`);
 }
 
-// --- Stdin pipe support for enqueue ---
-
-function handleStdinEnqueue(): void {
-  const args = process.argv.slice(2);
-  const queueIdx = args.indexOf("--enqueue");
-  if (queueIdx === -1) return;
-
-  const queueName = args[queueIdx + 1];
-  if (!queueName) {
-    console.error("Usage: mcp-brain --enqueue <queue-name> < items.txt");
-    process.exit(1);
-  }
-
-  getDb();
-  const stdinData = readFileSync(0, "utf-8");
-  const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
-
-  if (lines.length === 0) {
-    console.log("No items to enqueue (stdin was empty).");
-    process.exit(0);
-  }
-
-  const ids = enqueue(queueName, lines);
-  console.log(`Enqueued ${ids.length} item(s) in "${queueName}".`);
-  process.exit(0);
-}
-
-function runBackup(): void {
-  mkdirSync(BACKUP_DIR, { recursive: true });
-  const dbPath = getDbPath();
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backupPath = join(BACKUP_DIR, `brain-${timestamp}.db`);
-
-  try {
-    // Use sqlite3 .backup for safe hot backup
-    execSync(`sqlite3 "${dbPath}" ".backup '${backupPath}'"`, {
-      stdio: "pipe",
-    });
-    log.success(`Backup created: ${backupPath}`);
-    cleanOldBackups();
-  } catch {
-    log.error("Backup failed. Is sqlite3 installed?");
-  }
-}
-
-function cleanOldBackups(): void {
-  const files = readdirSync(BACKUP_DIR)
-    .filter((f) => f.startsWith("brain-") && f.endsWith(".db"))
-    .map((f) => ({
-      name: f,
-      path: join(BACKUP_DIR, f),
-      mtime: statSync(join(BACKUP_DIR, f)).mtimeMs,
-    }))
-    .sort((a, b) => b.mtime - a.mtime);
-
-  const now = Date.now();
-  const hourMs = 3600_000;
-  const dayMs = 86400_000;
-
-  // Keep 48 hourly (files < 48h old) + 30 daily (one per day for older files)
-  const keep = new Set<string>();
-  const seenDays = new Set<string>();
-
-  for (const f of files) {
-    const ageMs = now - f.mtime;
-
-    if (ageMs < 48 * hourMs) {
-      keep.add(f.name);
-    } else if (ageMs < 30 * dayMs) {
-      const day = new Date(f.mtime).toISOString().slice(0, 10);
-      if (!seenDays.has(day)) {
-        seenDays.add(day);
-        keep.add(f.name);
-      }
-    }
-  }
-
-  let removed = 0;
-  for (const f of files) {
-    if (!keep.has(f.name)) {
-      unlinkSync(f.path);
-      removed++;
-    }
-  }
-
-  if (removed > 0) {
-    log.info(`Cleaned ${removed} old backup(s).`);
-  }
-}
-
-async function installCron(): Promise<void> {
-  const ok = await confirm({
-    message: "Install hourly backup cron job?",
-  });
-  if (bail(ok)) return;
-  if (!ok) return;
-
-  const nodePath = process.execPath;
-  const cliPath = process.argv[1];
-  const cronLine = `0 * * * * "${nodePath}" "${cliPath}" --backup`;
-
-  try {
-    const existing = execSync("crontab -l 2>/dev/null", {
-      encoding: "utf-8",
-    }).trim();
-
-    if (existing.includes("mcp-brain")) {
-      log.info("Cron job already installed.");
-      return;
-    }
-
-    const newCrontab = existing ? `${existing}\n${cronLine}\n` : `${cronLine}\n`;
-    execSync(`echo "${newCrontab.replace(/"/g, '\\"')}" | crontab -`, {
-      stdio: "pipe",
-    });
-    log.success("Cron job installed: hourly backup.");
-  } catch {
-    log.error("Failed to install cron. You may need to add it manually:");
-    log.message(`  ${cronLine}`);
-  }
-}
-
-// --- Set menus ---
+// --- Set interactive menus ---
 
 async function setsMenu(): Promise<void> {
   while (true) {
@@ -616,16 +942,16 @@ async function setsMenu(): Promise<void> {
         await viewSetMenu();
         break;
       case "add":
-        await addToSetMenu();
+        await addToSetMenuInteractive();
         break;
       case "check":
-        await checkSetMenu();
+        await checkSetMenuInteractive();
         break;
       case "remove":
-        await removeFromSetMenu();
+        await removeFromSetMenuInteractive();
         break;
       case "delete":
-        await deleteSetMenu();
+        await deleteSetMenuInteractive();
         break;
       case "back":
         return;
@@ -660,20 +986,20 @@ async function pickSet(): Promise<string | null> {
 }
 
 async function viewSetMenu(): Promise<void> {
-  const set = await pickSet();
-  if (!set) return;
+  const setName = await pickSet();
+  if (!setName) return;
 
-  const members = listSetMembers(set);
+  const members = listSetMembers(setName);
   if (members.length === 0) {
     log.info("Set is empty.");
     return;
   }
 
-  log.info(`${members.length} member(s) in "${set}":`);
+  log.info(`${members.length} member(s) in "${setName}":`);
   log.message(members.map((m) => `  ${m}`).join("\n"));
 }
 
-async function addToSetMenu(): Promise<void> {
+async function addToSetMenuInteractive(): Promise<void> {
   const setName = await text({ message: "Set name (auto-created if new)" });
   if (bail(setName)) return;
   if (!setName.trim()) return;
@@ -710,26 +1036,26 @@ async function addToSetMenu(): Promise<void> {
   }
 }
 
-async function checkSetMenu(): Promise<void> {
-  const set = await pickSet();
-  if (!set) return;
+async function checkSetMenuInteractive(): Promise<void> {
+  const setName = await pickSet();
+  if (!setName) return;
 
   const key = await text({ message: "Key to check" });
   if (bail(key)) return;
   if (!key.trim()) return;
 
-  if (setHas(set, key.trim())) {
-    log.success(`"${key.trim()}" IS in set "${set}".`);
+  if (setHas(setName, key.trim())) {
+    log.success(`"${key.trim()}" IS in set "${setName}".`);
   } else {
-    log.info(`"${key.trim()}" is NOT in set "${set}".`);
+    log.info(`"${key.trim()}" is NOT in set "${setName}".`);
   }
 }
 
-async function removeFromSetMenu(): Promise<void> {
-  const set = await pickSet();
-  if (!set) return;
+async function removeFromSetMenuInteractive(): Promise<void> {
+  const setName = await pickSet();
+  if (!setName) return;
 
-  const members = listSetMembers(set);
+  const members = listSetMembers(setName);
   if (members.length === 0) {
     log.info("Set is empty.");
     return;
@@ -745,528 +1071,53 @@ async function removeFromSetMenu(): Promise<void> {
   if (bail(key)) return;
   if (!key) return;
 
-  removeFromSet(set, key);
-  log.success(`Removed "${key}" from set "${set}".`);
+  removeFromSet(setName, key);
+  log.success(`Removed "${key}" from set "${setName}".`);
 }
 
-async function deleteSetMenu(): Promise<void> {
-  const set = await pickSet();
-  if (!set) return;
+async function deleteSetMenuInteractive(): Promise<void> {
+  const setName = await pickSet();
+  if (!setName) return;
 
-  const members = listSetMembers(set);
+  const members = listSetMembers(setName);
   const ok = await confirm({
-    message: `Delete set "${set}" and its ${members.length} member(s)? This cannot be undone.`,
+    message: `Delete set "${setName}" and its ${members.length} member(s)? This cannot be undone.`,
   });
   if (bail(ok)) return;
   if (!ok) return;
 
-  const count = deleteSet(set);
-  log.success(`Deleted set "${set}" (${count} member(s)).`);
+  const count = deleteSet(setName);
+  log.success(`Deleted set "${setName}" (${count} member(s)).`);
 }
 
-// --- Queue CLI handlers ---
+async function installCronInteractive(): Promise<void> {
+  const ok = await confirm({
+    message: "Install hourly backup cron job?",
+  });
+  if (bail(ok)) return;
+  if (!ok) return;
 
-function handleDeleteQueueItem(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--delete-queue-item");
-  if (idx === -1) return;
-
-  const rawId = args[idx + 1];
-  const id = Number(rawId);
-  if (!rawId || !Number.isInteger(id)) {
-    console.error("Usage: brain --delete-queue-item <item-id>");
-    process.exit(1);
-  }
-
-  getDb();
-  try {
-    deleteQueueItem(id);
-    console.log(`Deleted queue item #${id}.`);
-  } catch (e) {
-    console.error((e as Error).message);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-function handleNextQueueItem(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--next-queue-item");
-  if (idx === -1) return;
-
-  const queueName = args[idx + 1];
-  if (!queueName) {
-    console.error("Usage: brain --next-queue-item <queue-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  const item = getNextQueueItem(queueName);
-  if (!item) {
-    process.exit(1);
-  }
-
-  console.log(`${item.id}\t${item.value}`);
-  process.exit(0);
-}
-
-// --- Project/Chunk CLI handlers ---
-
-function handleListProjects(): void {
-  getDb();
-  const projects = listProjectDetails();
-  if (projects.length === 0) {
-    console.log("No projects found.");
-    process.exit(0);
-  }
-  for (const p of projects) {
-    console.log(`${p.name}\t${p.chunk_count}`);
-  }
-  process.exit(0);
-}
-
-function handleListChunks(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--list-chunks");
-  if (idx === -1) return;
-
-  const project = args[idx + 1];
-  if (!project) {
-    console.error("Usage: brain --list-chunks <project> [--status <status>]");
-    process.exit(1);
-  }
-
-  const statusIdx = args.indexOf("--status");
-  const status = statusIdx !== -1 ? args[statusIdx + 1] : undefined;
-
-  getDb();
-  const chunks = listChunks(project, status);
-  if (chunks.length === 0) {
-    console.log("No records found.");
-    process.exit(0);
-  }
-  for (const c of chunks) {
-    console.log(`${c.id}\t${c.status}\t${c.sequence || ""}\t${c.title}`);
-  }
-  process.exit(0);
-}
-
-function handleGetChunk(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--get-chunk");
-  if (idx === -1) return;
-
-  const rawId = args[idx + 1];
-  const id = Number(rawId);
-  if (!rawId || !Number.isInteger(id)) {
-    console.error("Usage: brain --get-chunk <id>");
-    process.exit(1);
-  }
-
-  getDb();
-  const chunk = getChunk(id);
-  if (!chunk) {
-    console.error("Record not found.");
-    process.exit(1);
-  }
-
-  console.log(JSON.stringify(chunk));
-  process.exit(0);
-}
-
-function handleListDeleted(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--list-deleted");
-  if (idx === -1) return;
-
-  const project = args[idx + 1]; // optional
-
-  getDb();
-  const deleted = listDeletedChunks(project || undefined);
-  if (deleted.length === 0) {
-    console.log("Trash is empty.");
-    process.exit(0);
-  }
-  for (const c of deleted) {
-    console.log(`${c.id}\t${c.project}\t${c.title}\t${c.deleted_at}`);
-  }
-  process.exit(0);
-}
-
-function handleRestoreChunk(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--restore-chunk");
-  if (idx === -1) return;
-
-  const rawId = args[idx + 1];
-  const id = Number(rawId);
-  if (!rawId || !Number.isInteger(id)) {
-    console.error("Usage: brain --restore-chunk <id>");
-    process.exit(1);
-  }
-
-  getDb();
-  try {
-    const restored = restoreChunk(id);
-    console.log(`Restored record #${restored.id}: ${restored.title}`);
-  } catch (e) {
-    console.error((e as Error).message);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-function handleEmptyTrash(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--empty-trash");
-  if (idx === -1) return;
-
-  const project = args[idx + 1]; // optional
-
-  getDb();
-  const count = emptyTrash(project || undefined);
-  console.log(`Permanently deleted ${count} record(s).`);
-  process.exit(0);
-}
-
-// --- Queue CLI handlers ---
-
-function handleListQueues(): void {
-  getDb();
-  const queues = listQueues();
-  if (queues.length === 0) {
-    console.log("No queues found.");
-    process.exit(0);
-  }
-  for (const q of queues) {
-    console.log(`${q.name}\t${q.item_count}`);
-  }
-  process.exit(0);
-}
-
-function handleListQueueItems(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--list-queue-items");
-  if (idx === -1) return;
-
-  const queueName = args[idx + 1];
-  if (!queueName) {
-    console.error("Usage: brain --list-queue-items <queue-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  const items = listQueueItems(queueName);
-  if (items.length === 0) {
-    console.log("Queue is empty.");
-    process.exit(0);
-  }
-  for (const item of items) {
-    console.log(`${item.id}\t${item.value}`);
-  }
-  process.exit(0);
-}
-
-function handleDeleteQueue(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--delete-queue");
-  if (idx === -1) return;
-
-  const queueName = args[idx + 1];
-  if (!queueName) {
-    console.error("Usage: brain --delete-queue <queue-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  const count = deleteQueue(queueName);
-  console.log(`Deleted queue "${queueName}" (${count} item(s)).`);
-  process.exit(0);
-}
-
-function handleSetHas(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--set-has");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  const keyIdx = args.indexOf("--key");
-  const key = keyIdx !== -1 ? args[keyIdx + 1] : undefined;
-
-  if (!setName || !key) {
-    console.error("Usage: brain --set-has <set-name> --key <key>");
-    process.exit(1);
-  }
-
-  getDb();
-  if (setHas(setName, key)) {
-    console.log("true");
-    process.exit(0);
-  } else {
-    console.log("false");
-    process.exit(1);
-  }
-}
-
-function handleBackup(): void {
-  getDb();
-  mkdirSync(BACKUP_DIR, { recursive: true });
-  const dbPath = getDbPath();
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backupPath = join(BACKUP_DIR, `brain-${timestamp}.db`);
-
-  try {
-    execSync(`sqlite3 "${dbPath}" ".backup '${backupPath}'"`, { stdio: "pipe" });
-    console.log(backupPath);
-    cleanOldBackups();
-  } catch {
-    console.error("Backup failed. Is sqlite3 installed?");
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-function handleInstallCron(): void {
   const nodePath = process.execPath;
   const cliPath = process.argv[1];
-  const cronLine = `0 * * * * "${nodePath}" "${cliPath}" --backup`;
+  const cronLine = `0 * * * * "${nodePath}" "${cliPath}" backup`;
 
   try {
     const existing = execSync("crontab -l 2>/dev/null", {
       encoding: "utf-8",
     }).trim();
 
-    if (existing.includes("mcp-brain")) {
-      console.log("Cron job already installed.");
-      process.exit(0);
+    if (existing.includes("brain")) {
+      log.info("Cron job already installed.");
+      return;
     }
 
     const newCrontab = existing ? `${existing}\n${cronLine}\n` : `${cronLine}\n`;
     execSync(`echo "${newCrontab.replace(/"/g, '\\"')}" | crontab -`, {
       stdio: "pipe",
     });
-    console.log("Cron job installed: hourly backup.");
+    log.success("Cron job installed: hourly backup.");
   } catch {
-    console.error("Failed to install cron. Add manually:");
-    console.error(`  ${cronLine}`);
-    process.exit(1);
+    log.error("Failed to install cron. You may need to add it manually:");
+    log.message(`  ${cronLine}`);
   }
-  process.exit(0);
-}
-
-// --- Set CLI handlers ---
-
-function handleAddToSet(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--add-to-set");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  if (!setName) {
-    console.error("Usage: brain --add-to-set <set-name> [--key <key>]");
-    process.exit(1);
-  }
-
-  getDb();
-  const keyIdx = args.indexOf("--key");
-  if (keyIdx !== -1) {
-    const key = args[keyIdx + 1];
-    if (!key) {
-      console.error("Usage: brain --add-to-set <set-name> --key <key>");
-      process.exit(1);
-    }
-    addToSet(setName, key);
-    console.log(`Added "${key}" to set "${setName}".`);
-  } else {
-    const stdinData = readFileSync(0, "utf-8");
-    const keys = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
-    if (keys.length === 0) {
-      console.log("No keys to add (stdin was empty).");
-      process.exit(0);
-    }
-    const added = addManyToSet(setName, keys);
-    console.log(`Added ${added} key(s) to set "${setName}" (${keys.length - added} already existed).`);
-  }
-  process.exit(0);
-}
-
-function handleRemoveFromSet(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--remove-from-set");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  const keyIdx = args.indexOf("--key");
-  const key = keyIdx !== -1 ? args[keyIdx + 1] : undefined;
-
-  if (!setName || !key) {
-    console.error("Usage: brain --remove-from-set <set-name> --key <key>");
-    process.exit(1);
-  }
-
-  getDb();
-  try {
-    removeFromSet(setName, key);
-    console.log(`Removed "${key}" from set "${setName}".`);
-  } catch (e) {
-    console.error((e as Error).message);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-function handleInSet(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--in-set");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  if (!setName) {
-    console.error("Usage: ... | brain --in-set <set-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  const stdinData = readFileSync(0, "utf-8");
-  const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
-
-  for (const line of lines) {
-    if (setHas(setName, line)) {
-      process.stdout.write(line + "\n");
-    }
-  }
-  process.exit(0);
-}
-
-function handleNotInSet(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--not-in-set");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  if (!setName) {
-    console.error("Usage: ... | brain --not-in-set <set-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  const stdinData = readFileSync(0, "utf-8");
-  const lines = stdinData.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
-
-  for (const line of lines) {
-    if (!setHas(setName, line)) {
-      process.stdout.write(line + "\n");
-    }
-  }
-  process.exit(0);
-}
-
-function handleDeleteSet(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--delete-set");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  if (!setName) {
-    console.error("Usage: brain --delete-set <set-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  try {
-    const count = deleteSet(setName);
-    console.log(`Deleted set "${setName}" (${count} member(s)).`);
-  } catch (e) {
-    console.error((e as Error).message);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-function handleListSets(): void {
-  if (!process.argv.includes("--list-sets")) return;
-
-  getDb();
-  const sets = listSets();
-  if (sets.length === 0) {
-    console.log("No sets found.");
-  } else {
-    for (const s of sets) {
-      console.log(`${s.name}\t${s.member_count}`);
-    }
-  }
-  process.exit(0);
-}
-
-function handleListSetMembers(): void {
-  const args = process.argv.slice(2);
-  const idx = args.indexOf("--list-set-members");
-  if (idx === -1) return;
-
-  const setName = args[idx + 1];
-  if (!setName) {
-    console.error("Usage: brain --list-set-members <set-name>");
-    process.exit(1);
-  }
-
-  getDb();
-  const members = listSetMembers(setName);
-  for (const m of members) {
-    process.stdout.write(m + "\n");
-  }
-  process.exit(0);
-}
-
-// Support non-interactive flags
-if (process.argv.includes("--search")) {
-  handleSearch();
-} else if (process.argv.includes("--list-projects")) {
-  handleListProjects();
-} else if (process.argv.includes("--list-chunks")) {
-  handleListChunks();
-} else if (process.argv.includes("--get-chunk")) {
-  handleGetChunk();
-} else if (process.argv.includes("--list-deleted")) {
-  handleListDeleted();
-} else if (process.argv.includes("--restore-chunk")) {
-  handleRestoreChunk();
-} else if (process.argv.includes("--empty-trash")) {
-  handleEmptyTrash();
-} else if (process.argv.includes("--list-queues")) {
-  handleListQueues();
-} else if (process.argv.includes("--list-queue-items")) {
-  handleListQueueItems();
-} else if (process.argv.includes("--next-queue-item")) {
-  handleNextQueueItem();
-} else if (process.argv.includes("--delete-queue-item")) {
-  handleDeleteQueueItem();
-} else if (process.argv.includes("--enqueue")) {
-  handleStdinEnqueue();
-} else if (process.argv.includes("--delete-queue")) {
-  handleDeleteQueue();
-} else if (process.argv.includes("--backup")) {
-  handleBackup();
-} else if (process.argv.includes("--install-cron")) {
-  handleInstallCron();
-} else if (process.argv.includes("--add-to-set")) {
-  handleAddToSet();
-} else if (process.argv.includes("--remove-from-set")) {
-  handleRemoveFromSet();
-} else if (process.argv.includes("--set-has")) {
-  handleSetHas();
-} else if (process.argv.includes("--in-set")) {
-  handleInSet();
-} else if (process.argv.includes("--not-in-set")) {
-  handleNotInSet();
-} else if (process.argv.includes("--delete-set")) {
-  handleDeleteSet();
-} else if (process.argv.includes("--list-sets")) {
-  handleListSets();
-} else if (process.argv.includes("--list-set-members")) {
-  handleListSetMembers();
-} else {
-  mainMenu().catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
 }

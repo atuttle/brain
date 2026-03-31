@@ -85,7 +85,7 @@ export function listProjects(): string[] {
 }
 
 export interface ProjectSummary extends Project {
-  chunk_count: number;
+  task_count: number;
 }
 
 export function listProjectDetails(): ProjectSummary[] {
@@ -93,7 +93,7 @@ export function listProjectDetails(): ProjectSummary[] {
   const rows = db
     .prepare(
       `SELECT p.name, p.states, p.created_at,
-              COUNT(c.id) AS chunk_count
+              COUNT(c.id) AS task_count
        FROM projects p
        LEFT JOIN chunks c ON c.project = p.name AND c.deleted_at IS NULL
        GROUP BY p.name
@@ -103,7 +103,7 @@ export function listProjectDetails(): ProjectSummary[] {
     name: string;
     states: string;
     created_at: string;
-    chunk_count: number;
+    task_count: number;
   }[];
   return rows.map((r) => ({
     ...r,
@@ -136,9 +136,9 @@ export function upsertProject(
   return getProject(name)!;
 }
 
-// --- Chunk operations ---
+// --- Task operations ---
 
-export interface Chunk {
+export interface Task {
   id: number;
   project: string;
   title: string;
@@ -151,9 +151,9 @@ export interface Chunk {
   deleted_at: string | null;
 }
 
-export type ChunkSummary = Omit<Chunk, "body">;
+export type TaskSummary = Omit<Task, "body">;
 
-interface ChunkRow {
+interface TaskRow {
   id: number;
   project: string;
   title: string;
@@ -166,25 +166,25 @@ interface ChunkRow {
   deleted_at: string | null;
 }
 
-function rowToChunk(row: ChunkRow): Chunk {
+function rowToTask(row: TaskRow): Task {
   return { ...row, refs: JSON.parse(row.refs) };
 }
 
-function rowToSummary(row: ChunkRow): ChunkSummary {
+function rowToSummary(row: TaskRow): TaskSummary {
   const { body: _, ...rest } = row;
   return { ...rest, refs: JSON.parse(rest.refs) };
 }
 
-export interface CreateChunkInput {
+export interface CreateTaskInput {
   title: string;
   body?: string;
   sequence?: string;
   refs?: string[];
 }
 
-export function createChunks(
+export function createTasks(
   project: string,
-  chunks: CreateChunkInput[]
+  tasks: CreateTaskInput[]
 ): number[] {
   const db = getDb();
   const proj = getProject(project);
@@ -198,14 +198,14 @@ export function createChunks(
 
   const ids: number[] = [];
   const insertAll = db.transaction(() => {
-    for (const chunk of chunks) {
+    for (const task of tasks) {
       const result = stmt.run(
         project,
-        chunk.title,
-        chunk.body ?? "",
+        task.title,
+        task.body ?? "",
         defaultStatus,
-        chunk.sequence ?? "",
-        JSON.stringify(chunk.refs ?? [])
+        task.sequence ?? "",
+        JSON.stringify(task.refs ?? [])
       );
       ids.push(Number(result.lastInsertRowid));
     }
@@ -215,10 +215,10 @@ export function createChunks(
   return ids;
 }
 
-export function listChunks(
+export function listTasks(
   project: string,
   status?: string
-): ChunkSummary[] {
+): TaskSummary[] {
   const db = getDb();
   let sql = `SELECT id, project, title, status, sequence, refs, created_at, updated_at, deleted_at
              FROM chunks WHERE project = ? AND deleted_at IS NULL`;
@@ -229,20 +229,20 @@ export function listChunks(
     params.push(status);
   }
 
-  const rows = db.prepare(sql).all(...params) as ChunkRow[];
+  const rows = db.prepare(sql).all(...params) as TaskRow[];
   const summaries = rows.map(rowToSummary);
-  return orderBy(summaries, [(c) => c.sequence], ["asc"]);
+  return orderBy(summaries, [(t) => t.sequence], ["asc"]);
 }
 
-export function getChunk(id: number): Chunk | null {
+export function getTask(id: number): Task | null {
   const db = getDb();
   const row = db
     .prepare("SELECT * FROM chunks WHERE id = ? AND deleted_at IS NULL")
-    .get(id) as ChunkRow | undefined;
-  return row ? rowToChunk(row) : null;
+    .get(id) as TaskRow | undefined;
+  return row ? rowToTask(row) : null;
 }
 
-export interface UpdateChunkInput {
+export interface UpdateTaskInput {
   title?: string;
   body?: string;
   status?: string;
@@ -250,10 +250,10 @@ export interface UpdateChunkInput {
   refs?: string[];
 }
 
-export function updateChunk(id: number, updates: UpdateChunkInput): Chunk {
+export function updateTask(id: number, updates: UpdateTaskInput): Task {
   const db = getDb();
-  const existing = getChunk(id);
-  if (!existing) throw new Error(`Chunk ${id} not found`);
+  const existing = getTask(id);
+  if (!existing) throw new Error(`Task ${id} not found`);
 
   if (updates.status) {
     const proj = getProject(existing.project);
@@ -293,28 +293,28 @@ export function updateChunk(id: number, updates: UpdateChunkInput): Chunk {
     ...params
   );
 
-  return getChunk(id)!;
+  return getTask(id)!;
 }
 
-export function deleteChunk(id: number): void {
+export function deleteTask(id: number): void {
   const db = getDb();
   const existing = db
     .prepare("SELECT id FROM chunks WHERE id = ? AND deleted_at IS NULL")
     .get(id);
-  if (!existing) throw new Error(`Chunk ${id} not found`);
+  if (!existing) throw new Error(`Task ${id} not found`);
 
   db.prepare("UPDATE chunks SET deleted_at = datetime('now') WHERE id = ?").run(
     id
   );
 }
 
-// --- Search chunks ---
+// --- Search tasks ---
 
-export function searchChunks(
+export function searchTasks(
   query: string,
   project?: string,
   status?: string
-): ChunkSummary[] {
+): TaskSummary[] {
   const db = getDb();
   const pattern = `%${query}%`;
   let sql = `SELECT id, project, title, status, sequence, refs, created_at, updated_at, deleted_at
@@ -331,29 +331,29 @@ export function searchChunks(
     params.push(status);
   }
 
-  const rows = db.prepare(sql).all(...params) as ChunkRow[];
+  const rows = db.prepare(sql).all(...params) as TaskRow[];
   const summaries = rows.map(rowToSummary);
-  return orderBy(summaries, [(c) => c.sequence], ["asc"]);
+  return orderBy(summaries, [(t) => t.sequence], ["asc"]);
 }
 
-// --- Append to chunk ---
+// --- Append to task ---
 
-export function appendToChunk(id: number, text: string): Chunk {
+export function appendToTask(id: number, text: string): Task {
   const db = getDb();
-  const existing = getChunk(id);
-  if (!existing) throw new Error(`Chunk ${id} not found`);
+  const existing = getTask(id);
+  if (!existing) throw new Error(`Task ${id} not found`);
 
   const newBody = existing.body ? existing.body + "\n\n" + text : text;
   db.prepare(
     "UPDATE chunks SET body = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(newBody, id);
 
-  return getChunk(id)!;
+  return getTask(id)!;
 }
 
-// --- For CLI: deleted chunks ---
+// --- For CLI: deleted tasks ---
 
-export function listDeletedChunks(project?: string): ChunkSummary[] {
+export function listDeletedTasks(project?: string): TaskSummary[] {
   const db = getDb();
   let sql = `SELECT id, project, title, status, sequence, refs, created_at, updated_at, deleted_at
              FROM chunks WHERE deleted_at IS NOT NULL`;
@@ -365,22 +365,22 @@ export function listDeletedChunks(project?: string): ChunkSummary[] {
   }
 
   sql += " ORDER BY deleted_at DESC";
-  const rows = db.prepare(sql).all(...params) as ChunkRow[];
+  const rows = db.prepare(sql).all(...params) as TaskRow[];
   return rows.map(rowToSummary);
 }
 
-export function restoreChunk(id: number): Chunk {
+export function restoreTask(id: number): Task {
   const db = getDb();
   const row = db
     .prepare("SELECT * FROM chunks WHERE id = ? AND deleted_at IS NOT NULL")
-    .get(id) as ChunkRow | undefined;
-  if (!row) throw new Error(`Deleted chunk ${id} not found`);
+    .get(id) as TaskRow | undefined;
+  if (!row) throw new Error(`Deleted task ${id} not found`);
 
   db.prepare(
     "UPDATE chunks SET deleted_at = NULL, updated_at = datetime('now') WHERE id = ?"
   ).run(id);
 
-  return getChunk(id)!;
+  return getTask(id)!;
 }
 
 export function emptyTrash(project?: string): number {

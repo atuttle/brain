@@ -4,13 +4,13 @@ import { z } from "zod";
 import {
   listProjects,
   upsertProject,
-  createChunks,
-  listChunks,
-  getChunk,
-  updateChunk,
-  deleteChunk,
-  searchChunks,
-  appendToChunk,
+  createTasks,
+  listTasks,
+  getTask,
+  updateTask,
+  deleteTask,
+  searchTasks,
+  appendToTask,
   listQueues,
   enqueue,
   getQueueLength,
@@ -25,7 +25,7 @@ import {
 } from "./db.js";
 
 const server = new McpServer({
-  name: "mcp-brain",
+  name: "brain",
   version: "1.0.0",
 });
 
@@ -55,14 +55,14 @@ server.registerTool("list_projects", {
 
 server.registerTool("create_project", {
   description:
-    "Create a new project or update an existing project's states. States define the lifecycle of chunks (default: pending, active, done, archived).",
+    "Create a new project or update an existing project's states. States define the lifecycle of tasks (default: pending, active, done, archived).",
   inputSchema: {
     name: z.string().describe("Project name (descriptive, kebab-case preferred)"),
     states: z
       .array(z.string())
       .optional()
       .describe(
-        'Custom lifecycle states for chunks in this project. Order matters — first state is the default for new chunks. Defaults to ["pending","active","done","archived"].'
+        'Custom lifecycle states for tasks in this project. Order matters — first state is the default for new tasks. Defaults to ["pending","active","done","archived"].'
       ),
   },
 }, async ({ name, states }) => {
@@ -72,43 +72,41 @@ server.registerTool("create_project", {
   };
 });
 
-// --- create_chunks ---
+// --- Task tools (canonical) ---
 
-server.registerTool("create_chunks", {
-  description:
-    "Create one or more chunks in a project. Chunks are units of work — plans, research, tasks. New chunks are always created in the first lifecycle state of the project. If you don't know the project, call list_projects first and ask the user.",
-  inputSchema: {
-    project: z.string().describe("Project name"),
-    chunks: z
-      .array(
-        z.object({
-          title: z.string().describe("Short description of the chunk"),
-          body: z
-            .string()
-            .optional()
-            .describe("Full content — plans, research notes, analysis"),
-          sequence: z
-            .string()
-            .optional()
-            .describe(
-              "Ordering key. Supports alphanumeric (1, 2, 3A, 3B, 3C1). Natural sort is applied."
-            ),
-          refs: z
-            .array(z.string())
-            .optional()
-            .describe("File paths relevant to this chunk"),
-        })
-      )
-      .describe("Array of chunks to create"),
-  },
-}, async ({ project, chunks }) => {
+const createTasksSchema = {
+  project: z.string().describe("Project name"),
+  tasks: z
+    .array(
+      z.object({
+        title: z.string().describe("Short description of the task"),
+        body: z
+          .string()
+          .optional()
+          .describe("Full content — plans, research notes, analysis"),
+        sequence: z
+          .string()
+          .optional()
+          .describe(
+            "Ordering key. Supports alphanumeric (1, 2, 3A, 3B, 3C1). Natural sort is applied."
+          ),
+        refs: z
+          .array(z.string())
+          .optional()
+          .describe("File paths relevant to this task"),
+      })
+    )
+    .describe("Array of tasks to create"),
+};
+
+const createTasksHandler = async ({ project, tasks }: { project: string; tasks: Array<{ title: string; body?: string; sequence?: string; refs?: string[] }> }) => {
   try {
-    const ids = createChunks(project, chunks);
+    const ids = createTasks(project, tasks);
     return {
       content: [
         {
           type: "text" as const,
-          text: `Created ${ids.length} chunk(s): ${JSON.stringify(ids)}`,
+          text: `Created ${ids.length} task(s): ${JSON.stringify(ids)}`,
         },
       ],
     };
@@ -118,164 +116,225 @@ server.registerTool("create_chunks", {
       isError: true,
     };
   }
-});
+};
 
-// --- list_chunks ---
-
-server.registerTool("list_chunks", {
+server.registerTool("create_tasks", {
   description:
-    "List chunks for a project, optionally filtered by status. Returns summaries (no body). Use get_chunk to read the full content of a specific chunk.",
-  inputSchema: {
-    project: z.string().describe("Project name"),
-    status: z
-      .string()
-      .optional()
-      .describe("Filter by status (e.g. pending, active, done)"),
-  },
-}, async ({ project, status }) => {
-  const chunks = listChunks(project, status);
-  if (chunks.length === 0) {
+    "Create one or more tasks in a project. Tasks are units of work — plans, research, action items. New tasks are always created in the first lifecycle state of the project. If you don't know the project, call list_projects first and ask the user.",
+  inputSchema: createTasksSchema,
+}, createTasksHandler);
+
+const listTasksSchema = {
+  project: z.string().describe("Project name"),
+  status: z
+    .string()
+    .optional()
+    .describe("Filter by status (e.g. pending, active, done)"),
+};
+
+const listTasksHandler = async ({ project, status }: { project: string; status?: string }) => {
+  const tasks = listTasks(project, status);
+  if (tasks.length === 0) {
     return {
       content: [
         {
           type: "text" as const,
           text: status
-            ? `No ${status} chunks in project "${project}".`
-            : `No chunks in project "${project}".`,
+            ? `No ${status} tasks in project "${project}".`
+            : `No tasks in project "${project}".`,
         },
       ],
     };
   }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(chunks, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(tasks, null, 2) }],
   };
-});
+};
 
-// --- get_chunk ---
+server.registerTool("list_tasks", {
+  description:
+    "List tasks for a project, optionally filtered by status. Returns summaries (no body). Use get_task to read the full content of a specific task.",
+  inputSchema: listTasksSchema,
+}, listTasksHandler);
 
-server.registerTool("get_chunk", {
-  description: "Get the full content of a chunk by ID, including its body.",
-  inputSchema: {
-    id: z.coerce.number().describe("Chunk ID"),
-  },
-}, async ({ id }) => {
-  const chunk = getChunk(id);
-  if (!chunk) {
+const getTaskSchema = {
+  id: z.coerce.number().describe("Task ID"),
+};
+
+const getTaskHandler = async ({ id }: { id: number }) => {
+  const task = getTask(id);
+  if (!task) {
     return {
-      content: [{ type: "text" as const, text: `Chunk ${id} not found.` }],
+      content: [{ type: "text" as const, text: `Task ${id} not found.` }],
       isError: true,
     };
   }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(chunk, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(task, null, 2) }],
   };
-});
+};
 
-// --- update_chunk ---
+server.registerTool("get_task", {
+  description: "Get the full content of a task by ID, including its body.",
+  inputSchema: getTaskSchema,
+}, getTaskHandler);
+
+const updateTaskSchema = {
+  id: z.coerce.number().describe("Task ID"),
+  title: z.string().optional().describe("New title"),
+  body: z.string().optional().describe("New body content"),
+  status: z
+    .string()
+    .optional()
+    .describe("New status (must be a valid state for the project)"),
+  sequence: z.string().optional().describe("New sequence key"),
+  refs: z
+    .array(z.string())
+    .optional()
+    .describe("New file path references (replaces existing)"),
+};
+
+const updateTaskHandler = async ({ id, ...updates }: { id: number; title?: string; body?: string; status?: string; sequence?: string; refs?: string[] }) => {
+  try {
+    const task = updateTask(id, updates);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(task, null, 2) }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+};
+
+server.registerTool("update_task", {
+  description:
+    "Update a task's title, body, status, sequence, or references. Only include fields you want to change.",
+  inputSchema: updateTaskSchema,
+}, updateTaskHandler);
+
+const deleteTaskSchema = {
+  id: z.coerce.number().describe("Task ID"),
+};
+
+const deleteTaskHandler = async ({ id }: { id: number }) => {
+  try {
+    deleteTask(id);
+    return {
+      content: [{ type: "text" as const, text: `Task ${id} soft-deleted.` }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+};
+
+server.registerTool("delete_task", {
+  description:
+    "Soft-delete a task. The task can be restored later via the CLI. Use this when a task is no longer needed.",
+  inputSchema: deleteTaskSchema,
+}, deleteTaskHandler);
+
+const searchTasksSchema = {
+  query: z.string().describe("Search term (case-insensitive substring match)"),
+  project: z
+    .string()
+    .optional()
+    .describe("Limit search to a specific project"),
+  status: z
+    .string()
+    .optional()
+    .describe("Limit search to a specific status"),
+};
+
+const searchTasksHandler = async ({ query, project, status }: { query: string; project?: string; status?: string }) => {
+  const tasks = searchTasks(query, project, status);
+  if (tasks.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: `No tasks matching "${query}".` }],
+    };
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(tasks, null, 2) }],
+  };
+};
+
+server.registerTool("search_tasks", {
+  description:
+    "Search tasks by keyword across title, body, and refs. Case-insensitive. Optionally filter by project and/or status. Returns summaries (no body). Use get_task to read matching tasks.",
+  inputSchema: searchTasksSchema,
+}, searchTasksHandler);
+
+const appendToTaskSchema = {
+  id: z.coerce.number().describe("Task ID"),
+  text: z.string().describe("Text to append to the task body"),
+};
+
+const appendToTaskHandler = async ({ id, text }: { id: number; text: string }) => {
+  try {
+    const task = appendToTask(id, text);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(task, null, 2) }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+};
+
+server.registerTool("append_to_task", {
+  description:
+    "Append text to a task's body. The text is added after two blank lines. Useful for incrementally building up notes, logs, or research.",
+  inputSchema: appendToTaskSchema,
+}, appendToTaskHandler);
+
+// --- Backwards-compat chunk aliases (deprecated) ---
+
+server.registerTool("create_chunks", {
+  description:
+    "[Deprecated: use create_tasks] Create one or more chunks in a project.",
+  inputSchema: createTasksSchema,
+}, createTasksHandler);
+
+server.registerTool("list_chunks", {
+  description:
+    "[Deprecated: use list_tasks] List chunks for a project, optionally filtered by status.",
+  inputSchema: listTasksSchema,
+}, listTasksHandler);
+
+server.registerTool("get_chunk", {
+  description: "[Deprecated: use get_task] Get the full content of a chunk by ID.",
+  inputSchema: getTaskSchema,
+}, getTaskHandler);
 
 server.registerTool("update_chunk", {
   description:
-    "Update a chunk's title, body, status, sequence, or references. Only include fields you want to change.",
-  inputSchema: {
-    id: z.coerce.number().describe("Chunk ID"),
-    title: z.string().optional().describe("New title"),
-    body: z.string().optional().describe("New body content"),
-    status: z
-      .string()
-      .optional()
-      .describe("New status (must be a valid state for the project)"),
-    sequence: z.string().optional().describe("New sequence key"),
-    refs: z
-      .array(z.string())
-      .optional()
-      .describe("New file path references (replaces existing)"),
-  },
-}, async ({ id, ...updates }) => {
-  try {
-    const chunk = updateChunk(id, updates);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(chunk, null, 2) }],
-    };
-  } catch (e) {
-    return {
-      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
-      isError: true,
-    };
-  }
-});
-
-// --- delete_chunk ---
+    "[Deprecated: use update_task] Update a chunk's fields.",
+  inputSchema: updateTaskSchema,
+}, updateTaskHandler);
 
 server.registerTool("delete_chunk", {
   description:
-    "Soft-delete a chunk. The chunk can be restored later via the CLI. Use this when a chunk is no longer needed.",
-  inputSchema: {
-    id: z.coerce.number().describe("Chunk ID"),
-  },
-}, async ({ id }) => {
-  try {
-    deleteChunk(id);
-    return {
-      content: [{ type: "text" as const, text: `Chunk ${id} soft-deleted.` }],
-    };
-  } catch (e) {
-    return {
-      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
-      isError: true,
-    };
-  }
-});
-
-// --- search_chunks ---
+    "[Deprecated: use delete_task] Soft-delete a chunk.",
+  inputSchema: deleteTaskSchema,
+}, deleteTaskHandler);
 
 server.registerTool("search_chunks", {
   description:
-    "Search chunks by keyword across title, body, and refs. Case-insensitive. Optionally filter by project and/or status. Returns summaries (no body). Use get_chunk to read matching chunks.",
-  inputSchema: {
-    query: z.string().describe("Search term (case-insensitive substring match)"),
-    project: z
-      .string()
-      .optional()
-      .describe("Limit search to a specific project"),
-    status: z
-      .string()
-      .optional()
-      .describe("Limit search to a specific status"),
-  },
-}, async ({ query, project, status }) => {
-  const chunks = searchChunks(query, project, status);
-  if (chunks.length === 0) {
-    return {
-      content: [{ type: "text" as const, text: `No chunks matching "${query}".` }],
-    };
-  }
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(chunks, null, 2) }],
-  };
-});
-
-// --- append_to_chunk ---
+    "[Deprecated: use search_tasks] Search chunks by keyword.",
+  inputSchema: searchTasksSchema,
+}, searchTasksHandler);
 
 server.registerTool("append_to_chunk", {
   description:
-    "Append text to a chunk's body. The text is added after two blank lines. Useful for incrementally building up notes, logs, or research.",
-  inputSchema: {
-    id: z.coerce.number().describe("Chunk ID"),
-    text: z.string().describe("Text to append to the chunk body"),
-  },
-}, async ({ id, text }) => {
-  try {
-    const chunk = appendToChunk(id, text);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(chunk, null, 2) }],
-    };
-  } catch (e) {
-    return {
-      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
-      isError: true,
-    };
-  }
-});
+    "[Deprecated: use append_to_task] Append text to a chunk's body.",
+  inputSchema: appendToTaskSchema,
+}, appendToTaskHandler);
 
 // --- list_queues ---
 

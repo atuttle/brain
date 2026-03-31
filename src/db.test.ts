@@ -7,15 +7,15 @@ import {
   listProjectDetails,
   getProject,
   upsertProject,
-  createChunks,
-  listChunks,
-  getChunk,
-  updateChunk,
-  deleteChunk,
-  searchChunks,
-  appendToChunk,
-  listDeletedChunks,
-  restoreChunk,
+  createTasks,
+  listTasks,
+  getTask,
+  updateTask,
+  deleteTask,
+  searchTasks,
+  appendToTask,
+  listDeletedTasks,
+  restoreTask,
   emptyTrash,
   listQueues,
   enqueue,
@@ -83,26 +83,26 @@ describe("projects", () => {
     expect(getProject("nope")).toBeNull();
   });
 
-  it("listProjectDetails includes chunk counts", () => {
+  it("listProjectDetails includes task counts", () => {
     upsertProject("a");
     upsertProject("b");
-    createChunks("a", [{ title: "t1" }, { title: "t2" }]);
-    createChunks("b", [{ title: "t3" }]);
+    createTasks("a", [{ title: "t1" }, { title: "t2" }]);
+    createTasks("b", [{ title: "t3" }]);
 
     const details = listProjectDetails();
     const a = details.find((d) => d.name === "a")!;
     const b = details.find((d) => d.name === "b")!;
-    expect(a.chunk_count).toBe(2);
-    expect(b.chunk_count).toBe(1);
+    expect(a.task_count).toBe(2);
+    expect(b.task_count).toBe(1);
   });
 });
 
-// ─── Chunks ─────────────────────────────────────────────
+// ─── Tasks ─────────────────────────────────────────────
 
-describe("chunks", () => {
-  it("creates chunks and returns ids", () => {
+describe("tasks", () => {
+  it("creates tasks and returns ids", () => {
     upsertProject("p");
-    const ids = createChunks("p", [
+    const ids = createTasks("p", [
       { title: "first", body: "body1", sequence: "1", refs: ["/a.ts"] },
       { title: "second" },
     ]);
@@ -110,117 +110,117 @@ describe("chunks", () => {
     expect(ids[0]).toBeLessThan(ids[1]);
   });
 
-  it("throws when creating chunks for nonexistent project", () => {
-    expect(() => createChunks("nope", [{ title: "x" }])).toThrow(
+  it("throws when creating tasks for nonexistent project", () => {
+    expect(() => createTasks("nope", [{ title: "x" }])).toThrow(
       'Project "nope" does not exist'
     );
   });
 
-  it("new chunks get the first project state as default status", () => {
+  it("new tasks get the first project state as default status", () => {
     upsertProject("p", ["todo", "done"]);
-    const [id] = createChunks("p", [{ title: "t" }]);
-    const chunk = getChunk(id)!;
-    expect(chunk.status).toBe("todo");
+    const [id] = createTasks("p", [{ title: "t" }]);
+    const task = getTask(id)!;
+    expect(task.status).toBe("todo");
   });
 
   it("stores body, sequence, and refs", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [
+    const [id] = createTasks("p", [
       { title: "t", body: "details", sequence: "3A", refs: ["/x", "/y"] },
     ]);
-    const chunk = getChunk(id)!;
-    expect(chunk.body).toBe("details");
-    expect(chunk.sequence).toBe("3A");
-    expect(chunk.refs).toEqual(["/x", "/y"]);
+    const task = getTask(id)!;
+    expect(task.body).toBe("details");
+    expect(task.sequence).toBe("3A");
+    expect(task.refs).toEqual(["/x", "/y"]);
   });
 
   it("defaults body/sequence/refs when omitted", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "bare" }]);
-    const chunk = getChunk(id)!;
-    expect(chunk.body).toBe("");
-    expect(chunk.sequence).toBe("");
-    expect(chunk.refs).toEqual([]);
+    const [id] = createTasks("p", [{ title: "bare" }]);
+    const task = getTask(id)!;
+    expect(task.body).toBe("");
+    expect(task.sequence).toBe("");
+    expect(task.refs).toEqual([]);
   });
 
-  it("getChunk returns null for nonexistent id", () => {
-    expect(getChunk(99999)).toBeNull();
+  it("getTask returns null for nonexistent id", () => {
+    expect(getTask(99999)).toBeNull();
   });
 });
 
 // ─── List & filter ──────────────────────────────────────
 
-describe("listChunks", () => {
-  it("lists all chunks for a project", () => {
+describe("listTasks", () => {
+  it("lists all tasks for a project", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "a" }, { title: "b" }]);
-    expect(listChunks("p")).toHaveLength(2);
+    createTasks("p", [{ title: "a" }, { title: "b" }]);
+    expect(listTasks("p")).toHaveLength(2);
   });
 
   it("filters by status", () => {
     upsertProject("p");
-    const [id1] = createChunks("p", [{ title: "a" }, { title: "b" }]);
-    updateChunk(id1, { status: "active" });
+    const [id1] = createTasks("p", [{ title: "a" }, { title: "b" }]);
+    updateTask(id1, { status: "active" });
 
-    expect(listChunks("p", "active")).toHaveLength(1);
-    expect(listChunks("p", "pending")).toHaveLength(1);
+    expect(listTasks("p", "active")).toHaveLength(1);
+    expect(listTasks("p", "pending")).toHaveLength(1);
   });
 
-  it("excludes soft-deleted chunks", () => {
+  it("excludes soft-deleted tasks", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "a" }]);
-    deleteChunk(id);
-    expect(listChunks("p")).toHaveLength(0);
+    const [id] = createTasks("p", [{ title: "a" }]);
+    deleteTask(id);
+    expect(listTasks("p")).toHaveLength(0);
   });
 
   it("returns summaries without body", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "a", body: "big body" }]);
-    const [summary] = listChunks("p");
+    createTasks("p", [{ title: "a", body: "big body" }]);
+    const [summary] = listTasks("p");
     expect(summary).not.toHaveProperty("body");
   });
 
   it("sorts by natural order of sequence", () => {
     upsertProject("p");
-    createChunks("p", [
+    createTasks("p", [
       { title: "c", sequence: "10" },
       { title: "a", sequence: "2" },
       { title: "b", sequence: "3A" },
     ]);
-    const chunks = listChunks("p");
-    expect(chunks.map((c) => c.sequence)).toEqual(["2", "3A", "10"]);
+    const tasks = listTasks("p");
+    expect(tasks.map((t) => t.sequence)).toEqual(["2", "3A", "10"]);
   });
 });
 
 // ─── Update ─────────────────────────────────────────────
 
-describe("updateChunk", () => {
+describe("updateTask", () => {
   it("updates title", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "old" }]);
-    const updated = updateChunk(id, { title: "new" });
+    const [id] = createTasks("p", [{ title: "old" }]);
+    const updated = updateTask(id, { title: "new" });
     expect(updated.title).toBe("new");
   });
 
   it("updates status to a valid state", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    const updated = updateChunk(id, { status: "done" });
+    const [id] = createTasks("p", [{ title: "t" }]);
+    const updated = updateTask(id, { status: "done" });
     expect(updated.status).toBe("done");
   });
 
   it("rejects invalid status", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    expect(() => updateChunk(id, { status: "bogus" })).toThrow(
+    const [id] = createTasks("p", [{ title: "t" }]);
+    expect(() => updateTask(id, { status: "bogus" })).toThrow(
       'Invalid status "bogus"'
     );
   });
 
   it("updates multiple fields at once", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    const updated = updateChunk(id, {
+    const [id] = createTasks("p", [{ title: "t" }]);
+    const updated = updateTask(id, {
       title: "new title",
       body: "new body",
       sequence: "5",
@@ -232,16 +232,16 @@ describe("updateChunk", () => {
     expect(updated.refs).toEqual(["/z.ts"]);
   });
 
-  it("throws for nonexistent chunk", () => {
-    expect(() => updateChunk(99999, { title: "x" })).toThrow("not found");
+  it("throws for nonexistent task", () => {
+    expect(() => updateTask(99999, { title: "x" })).toThrow("not found");
   });
 
   it("updates updated_at timestamp", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    const before = getChunk(id)!.updated_at;
+    const [id] = createTasks("p", [{ title: "t" }]);
+    const before = getTask(id)!.updated_at;
     // SQLite datetime granularity is seconds, so just check it doesn't throw
-    const updated = updateChunk(id, { body: "changed" });
+    const updated = updateTask(id, { body: "changed" });
     expect(updated.updated_at).toBeDefined();
     // updated_at should be >= before
     expect(updated.updated_at >= before).toBe(true);
@@ -251,74 +251,74 @@ describe("updateChunk", () => {
 // ─── Delete / Restore / Trash ───────────────────────────
 
 describe("delete & restore", () => {
-  it("soft-deletes a chunk", () => {
+  it("soft-deletes a task", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    deleteChunk(id);
-    expect(getChunk(id)).toBeNull();
+    const [id] = createTasks("p", [{ title: "t" }]);
+    deleteTask(id);
+    expect(getTask(id)).toBeNull();
   });
 
-  it("throws when deleting nonexistent chunk", () => {
-    expect(() => deleteChunk(99999)).toThrow("not found");
+  it("throws when deleting nonexistent task", () => {
+    expect(() => deleteTask(99999)).toThrow("not found");
   });
 
-  it("throws when deleting already-deleted chunk", () => {
+  it("throws when deleting already-deleted task", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    deleteChunk(id);
-    expect(() => deleteChunk(id)).toThrow("not found");
+    const [id] = createTasks("p", [{ title: "t" }]);
+    deleteTask(id);
+    expect(() => deleteTask(id)).toThrow("not found");
   });
 
-  it("lists deleted chunks", () => {
+  it("lists deleted tasks", () => {
     upsertProject("p");
-    const [id1, id2] = createChunks("p", [{ title: "a" }, { title: "b" }]);
-    deleteChunk(id1);
-    const deleted = listDeletedChunks();
+    const [id1, id2] = createTasks("p", [{ title: "a" }, { title: "b" }]);
+    deleteTask(id1);
+    const deleted = listDeletedTasks();
     expect(deleted).toHaveLength(1);
     expect(deleted[0].id).toBe(id1);
   });
 
-  it("filters deleted chunks by project", () => {
+  it("filters deleted tasks by project", () => {
     upsertProject("a");
     upsertProject("b");
-    const [id1] = createChunks("a", [{ title: "x" }]);
-    const [id2] = createChunks("b", [{ title: "y" }]);
-    deleteChunk(id1);
-    deleteChunk(id2);
+    const [id1] = createTasks("a", [{ title: "x" }]);
+    const [id2] = createTasks("b", [{ title: "y" }]);
+    deleteTask(id1);
+    deleteTask(id2);
 
-    expect(listDeletedChunks("a")).toHaveLength(1);
-    expect(listDeletedChunks("a")[0].id).toBe(id1);
+    expect(listDeletedTasks("a")).toHaveLength(1);
+    expect(listDeletedTasks("a")[0].id).toBe(id1);
   });
 
-  it("restores a deleted chunk", () => {
+  it("restores a deleted task", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    deleteChunk(id);
-    expect(getChunk(id)).toBeNull();
+    const [id] = createTasks("p", [{ title: "t" }]);
+    deleteTask(id);
+    expect(getTask(id)).toBeNull();
 
-    const restored = restoreChunk(id);
+    const restored = restoreTask(id);
     expect(restored.id).toBe(id);
     expect(restored.deleted_at).toBeNull();
-    expect(getChunk(id)).not.toBeNull();
+    expect(getTask(id)).not.toBeNull();
   });
 
-  it("throws when restoring non-deleted chunk", () => {
+  it("throws when restoring non-deleted task", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    expect(() => restoreChunk(id)).toThrow("not found");
+    const [id] = createTasks("p", [{ title: "t" }]);
+    expect(() => restoreTask(id)).toThrow("not found");
   });
 
   it("empties trash and returns count", () => {
     upsertProject("p");
-    const ids = createChunks("p", [{ title: "a" }, { title: "b" }, { title: "c" }]);
-    deleteChunk(ids[0]);
-    deleteChunk(ids[1]);
+    const ids = createTasks("p", [{ title: "a" }, { title: "b" }, { title: "c" }]);
+    deleteTask(ids[0]);
+    deleteTask(ids[1]);
 
     const count = emptyTrash();
     expect(count).toBe(2);
-    expect(listDeletedChunks()).toHaveLength(0);
-    // non-deleted chunk survives
-    expect(getChunk(ids[2])).not.toBeNull();
+    expect(listDeletedTasks()).toHaveLength(0);
+    // non-deleted task survives
+    expect(getTask(ids[2])).not.toBeNull();
   });
 
   it("emptyTrash returns 0 when trash is empty", () => {
@@ -328,115 +328,115 @@ describe("delete & restore", () => {
 
 // ─── Search ─────────────────────────────────────────────
 
-describe("searchChunks", () => {
+describe("searchTasks", () => {
   it("matches title", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "deploy pipeline" }, { title: "unrelated" }]);
-    const results = searchChunks("pipeline");
+    createTasks("p", [{ title: "deploy pipeline" }, { title: "unrelated" }]);
+    const results = searchTasks("pipeline");
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe("deploy pipeline");
   });
 
   it("matches body", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "notes", body: "the frobnitz is broken" }]);
-    const results = searchChunks("frobnitz");
+    createTasks("p", [{ title: "notes", body: "the frobnitz is broken" }]);
+    const results = searchTasks("frobnitz");
     expect(results).toHaveLength(1);
   });
 
   it("matches refs", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "task", refs: ["/src/utils.ts"] }]);
-    const results = searchChunks("utils.ts");
+    createTasks("p", [{ title: "task", refs: ["/src/utils.ts"] }]);
+    const results = searchTasks("utils.ts");
     expect(results).toHaveLength(1);
   });
 
   it("is case-insensitive", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "UPPERCASE THING" }]);
-    const results = searchChunks("uppercase");
+    createTasks("p", [{ title: "UPPERCASE THING" }]);
+    const results = searchTasks("uppercase");
     expect(results).toHaveLength(1);
   });
 
   it("returns empty array for no matches", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "hello" }]);
-    expect(searchChunks("zzzzz")).toEqual([]);
+    createTasks("p", [{ title: "hello" }]);
+    expect(searchTasks("zzzzz")).toEqual([]);
   });
 
   it("scopes to project", () => {
     upsertProject("a");
     upsertProject("b");
-    createChunks("a", [{ title: "needle" }]);
-    createChunks("b", [{ title: "needle" }]);
-    expect(searchChunks("needle", "a")).toHaveLength(1);
-    expect(searchChunks("needle", "a")[0].project).toBe("a");
+    createTasks("a", [{ title: "needle" }]);
+    createTasks("b", [{ title: "needle" }]);
+    expect(searchTasks("needle", "a")).toHaveLength(1);
+    expect(searchTasks("needle", "a")[0].project).toBe("a");
   });
 
   it("scopes to status", () => {
     upsertProject("p");
-    const [id1] = createChunks("p", [{ title: "needle a" }, { title: "needle b" }]);
-    updateChunk(id1, { status: "active" });
-    expect(searchChunks("needle", undefined, "active")).toHaveLength(1);
+    const [id1] = createTasks("p", [{ title: "needle a" }, { title: "needle b" }]);
+    updateTask(id1, { status: "active" });
+    expect(searchTasks("needle", undefined, "active")).toHaveLength(1);
   });
 
-  it("excludes soft-deleted chunks", () => {
+  it("excludes soft-deleted tasks", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "findme" }]);
-    deleteChunk(id);
-    expect(searchChunks("findme")).toEqual([]);
+    const [id] = createTasks("p", [{ title: "findme" }]);
+    deleteTask(id);
+    expect(searchTasks("findme")).toEqual([]);
   });
 
   it("returns summaries without body", () => {
     upsertProject("p");
-    createChunks("p", [{ title: "hit", body: "searchable content" }]);
-    const [result] = searchChunks("searchable");
+    createTasks("p", [{ title: "hit", body: "searchable content" }]);
+    const [result] = searchTasks("searchable");
     expect(result).not.toHaveProperty("body");
   });
 
   it("returns multiple results sorted by sequence", () => {
     upsertProject("p");
-    createChunks("p", [
+    createTasks("p", [
       { title: "needle C", sequence: "10" },
       { title: "needle A", sequence: "2" },
       { title: "needle B", sequence: "3" },
     ]);
-    const results = searchChunks("needle");
-    expect(results.map((c) => c.sequence)).toEqual(["2", "3", "10"]);
+    const results = searchTasks("needle");
+    expect(results.map((t) => t.sequence)).toEqual(["2", "3", "10"]);
   });
 });
 
-// ─── Append to chunk ────────────────────────────────────
+// ─── Append to task ────────────────────────────────────
 
-describe("appendToChunk", () => {
-  it("appends to chunk with existing body", () => {
+describe("appendToTask", () => {
+  it("appends to task with existing body", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t", body: "first" }]);
-    const updated = appendToChunk(id, "second");
+    const [id] = createTasks("p", [{ title: "t", body: "first" }]);
+    const updated = appendToTask(id, "second");
     expect(updated.body).toBe("first\n\nsecond");
   });
 
-  it("appends to chunk with empty body (no leading separator)", () => {
+  it("appends to task with empty body (no leading separator)", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    const updated = appendToChunk(id, "content");
+    const [id] = createTasks("p", [{ title: "t" }]);
+    const updated = appendToTask(id, "content");
     expect(updated.body).toBe("content");
   });
 
   it("bumps updated_at", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    const before = getChunk(id)!.updated_at;
-    const updated = appendToChunk(id, "more");
+    const [id] = createTasks("p", [{ title: "t" }]);
+    const before = getTask(id)!.updated_at;
+    const updated = appendToTask(id, "more");
     expect(updated.updated_at >= before).toBe(true);
   });
 
-  it("returns full chunk with all fields", () => {
+  it("returns full task with all fields", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [
+    const [id] = createTasks("p", [
       { title: "t", body: "b", sequence: "1", refs: ["/a.ts"] },
     ]);
-    const updated = appendToChunk(id, "extra");
+    const updated = appendToTask(id, "extra");
     expect(updated.id).toBe(id);
     expect(updated.title).toBe("t");
     expect(updated.sequence).toBe("1");
@@ -444,15 +444,15 @@ describe("appendToChunk", () => {
     expect(updated.body).toBe("b\n\nextra");
   });
 
-  it("throws for nonexistent chunk", () => {
-    expect(() => appendToChunk(99999, "x")).toThrow("not found");
+  it("throws for nonexistent task", () => {
+    expect(() => appendToTask(99999, "x")).toThrow("not found");
   });
 
   it("preserves other fields unchanged", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t", body: "orig" }]);
-    updateChunk(id, { status: "active", sequence: "5" });
-    const appended = appendToChunk(id, "new stuff");
+    const [id] = createTasks("p", [{ title: "t", body: "orig" }]);
+    updateTask(id, { status: "active", sequence: "5" });
+    const appended = appendToTask(id, "new stuff");
     expect(appended.status).toBe("active");
     expect(appended.sequence).toBe("5");
     expect(appended.title).toBe("t");
@@ -460,25 +460,22 @@ describe("appendToChunk", () => {
 
   it("handles multiple appends", () => {
     upsertProject("p");
-    const [id] = createChunks("p", [{ title: "t" }]);
-    appendToChunk(id, "one");
-    appendToChunk(id, "two");
-    const chunk = appendToChunk(id, "three");
-    expect(chunk.body).toBe("one\n\ntwo\n\nthree");
+    const [id] = createTasks("p", [{ title: "t" }]);
+    appendToTask(id, "one");
+    appendToTask(id, "two");
+    const task = appendToTask(id, "three");
+    expect(task.body).toBe("one\n\ntwo\n\nthree");
   });
 });
 
 // ─── Transactions ───────────────────────────────────────
 
 describe("transactions", () => {
-  it("createChunks is atomic — partial failure rolls back all", () => {
+  it("createTasks is atomic — partial failure rolls back all", () => {
     upsertProject("p");
-    // Manually break one insert by passing a chunk that violates constraints
-    // We can't easily force a mid-transaction failure with the current API,
-    // but we can verify the transaction wrapper works by checking all-or-nothing
-    const ids = createChunks("p", [{ title: "a" }, { title: "b" }]);
+    const ids = createTasks("p", [{ title: "a" }, { title: "b" }]);
     expect(ids).toHaveLength(2);
-    expect(listChunks("p")).toHaveLength(2);
+    expect(listTasks("p")).toHaveLength(2);
   });
 });
 

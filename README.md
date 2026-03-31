@@ -1,6 +1,6 @@
-# mcp-brain
+# brain
 
-Persistent chunk-based task memory and work queues for Claude Code via MCP.
+Persistent task memory and work queues for Claude Code via MCP.
 
 ## Install
 
@@ -11,68 +11,63 @@ pnpm build
 
 ## CLI
 
-Run with no flags for an interactive TUI, or use flags for scriptable access.
+Bare `brain` launches an interactive TUI. Subcommands are for scripts and piping.
+
+All tabular output is `\t`-delimited. Stdin-accepting commands read one item per line, ignoring blanks.
+
+### `brain project`
+
+| Command | Description |
+|---|---|
+| `brain project list` | List projects (`name \t count`) |
+| `brain project list <project> [--status <s>]` | List tasks in a project (`id \t status \t seq \t title`) |
+| `brain project get-task <id>` | Full task as JSON |
+| `brain project search <query>` | Full-text search (`id \t project \t status \t title`) |
+| `brain project list-deleted [project]` | Trashed tasks (`id \t project \t title \t deleted_at`) |
+| `brain project restore-task <id>` | Restore a soft-deleted task |
+| `brain project empty-trash [project]` | Permanently delete all trashed tasks |
+
+### `brain queue`
+
+| Command | Description |
+|---|---|
+| `brain queue list` | List queues (`name \t count`) |
+| `brain queue items <queue>` | List items (`id \t value`) |
+| `brain queue add <queue>` | Enqueue from stdin; auto-creates queue |
+| `brain queue next <queue>` | Peek next FIFO item (`id \t value`); exit 1 if empty |
+| `brain queue delete-item <id>` | Delete item by ID (call after processing) |
+| `brain queue delete <queue>` | Delete queue and all items |
 
 ```bash
-node dist/cli.js            # interactive
-node dist/cli.js --flag     # non-interactive
+find src -name '*.ts' | brain queue add my-queue
 ```
 
-All tabular output is `\t`-delimited. Stdin-accepting flags read one item per line, ignoring blanks.
+### `brain set`
 
-### Chunks
-
-| Flag | Description |
+| Command | Description |
 |---|---|
-| `--list-projects` | List projects (`name \t count`) |
-| `--list-chunks <project> [--status <s>]` | List chunks (`id \t status \t seq \t title`) |
-| `--get-chunk <id>` | Full chunk as JSON |
-| `--search <query>` | Full-text search (`id \t project \t status \t title`) |
-| `--list-deleted [project]` | Trashed chunks (`id \t project \t title \t deleted_at`) |
-| `--restore-chunk <id>` | Restore a soft-deleted chunk |
-| `--empty-trash [project]` | Permanently delete all trashed chunks |
-
-### Queues
-
-| Flag | Description |
-|---|---|
-| `--list-queues` | List queues (`name \t count`) |
-| `--enqueue <queue>` | Enqueue items from stdin; auto-creates queue |
-| `--list-queue-items <queue>` | List items (`id \t value`) |
-| `--next-queue-item <queue>` | Peek next FIFO item (`id \t value`); exit 1 if empty |
-| `--delete-queue-item <id>` | Delete item by ID (call after processing) |
-| `--delete-queue <queue>` | Delete queue and all items |
-
-```bash
-find src -name '*.ts' | node dist/cli.js --enqueue my-queue
-```
-
-### Sets
-
-| Flag | Description |
-|---|---|
-| `--list-sets` | List sets (`name \t count`) |
-| `--list-set-members <set>` | List keys (one per line) |
-| `--add-to-set <set> [--key <k>]` | Add keys from stdin or single `--key` |
-| `--remove-from-set <set> --key <k>` | Remove a key |
-| `--set-has <set> --key <k>` | Check membership; prints `true`/`false`, exit 0/1 |
-| `--in-set <set>` | Filter stdin to members only |
-| `--not-in-set <set>` | Filter stdin to non-members only |
-| `--delete-set <set>` | Delete set and all members |
+| `brain set list` | List sets (`name \t count`) |
+| `brain set members <set>` | List keys (one per line) |
+| `brain set add <set> [--key <k>]` | Add keys from stdin or single `--key` |
+| `brain set remove <set> --key <k>` | Remove a key |
+| `brain set has <set> --key <k>` | Check membership; prints `true`/`false`, exit 0/1 |
+| `brain set in <set>` | Filter stdin to members only |
+| `brain set not-in <set>` | Filter stdin to non-members only |
+| `brain set delete <set>` | Delete set and all members |
 
 ```bash
 # Enqueue unreviewed controllers
 find com -path '*/controllers/*.cfc' -type f \
-  | node dist/cli.js --not-in-set bug-free-controllers \
-  | node dist/cli.js --enqueue review-queue
+  | brain set not-in bug-free-controllers \
+  | brain queue add review-queue
 ```
 
-### Maintenance
+### `brain backup`
 
-| Flag | Description |
+| Command | Description |
 |---|---|
-| `--backup` | Create backup; prints path. Stored in `~/.mcp-brain/backups/` (48 hourly + 30 daily) |
-| `--install-cron` | Install hourly backup cron job |
+| `brain backup` | Create backup; prints path. Stored in `~/.mcp-brain/backups/` (48 hourly + 30 daily) |
+| `brain backup install-cron` | Install hourly backup cron job |
 
 ## MCP Server
 
@@ -93,19 +88,21 @@ For project-scoped use, add the same config to `.claude/settings.json` in your r
 
 ### MCP Tools
 
-**Projects & Chunks**
+**Projects & Tasks**
 
 | Tool | Description |
 |---|---|
 | `list_projects` | List all projects |
 | `create_project` | Create/update a project and its lifecycle states |
-| `create_chunks` | Create chunks (units of work) in a project |
-| `list_chunks` | List chunk summaries, optionally filtered by status |
-| `get_chunk` | Get full chunk content by ID |
-| `update_chunk` | Update chunk fields (title, body, status, sequence, refs) |
-| `append_to_chunk` | Append text to a chunk's body |
-| `search_chunks` | Full-text search across chunks |
-| `delete_chunk` | Soft-delete a chunk |
+| `create_tasks` | Create tasks in a project |
+| `list_tasks` | List task summaries, optionally filtered by status |
+| `get_task` | Get full task content by ID |
+| `update_task` | Update task fields (title, body, status, sequence, refs) |
+| `append_to_task` | Append text to a task's body |
+| `search_tasks` | Full-text search across tasks |
+| `delete_task` | Soft-delete a task |
+
+> The `*_chunk*` variants (`create_chunks`, `list_chunks`, etc.) are still registered for backwards compatibility but are deprecated.
 
 **Queues**
 

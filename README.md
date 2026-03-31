@@ -1,4 +1,4 @@
-# brain
+# brain 🧠
 
 Persistent SQLite store that gives Claude Code projects, work queues, and sets — accessible via MCP tools and a scriptable CLI.
 

@@ -28,6 +28,7 @@ All tabular output is `\t`-delimited. Stdin-accepting commands read one item per
 
 | Command | Description |
 |---|---|
+| `brain project create <name> [--states <s,s,s>]` | Create/update a project (default states: `pending,active,done`) |
 | `brain project list` | List projects (`name \t count`) |
 | `brain project list <project> [--status <s>]` | List tasks in a project (`id \t status \t seq \t title`) |
 | `brain project get-task <id>` | Full task as JSON |

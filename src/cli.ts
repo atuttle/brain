@@ -7,6 +7,7 @@ import {
   getDbPath,
   listProjectDetails,
   getProject,
+  upsertProject,
   listTasks,
   getTask,
   searchTasks,
@@ -52,6 +53,18 @@ const program = new Command("brain")
 const project = program
   .command("project")
   .description("Manage projects and tasks");
+
+project
+  .command("create")
+  .description("Create or update a project")
+  .argument("<name>", "project name")
+  .option("--states <states>", "comma-separated lifecycle states", "pending,active,done")
+  .action((name: string, opts: { states: string }) => {
+    getDb();
+    const states = opts.states.split(",").map((s) => s.trim()).filter(Boolean);
+    const p = upsertProject(name, states);
+    console.log(`${p.name}\t${p.states.join(",")}`);
+  });
 
 project
   .command("list")

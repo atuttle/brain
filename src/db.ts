@@ -308,6 +308,16 @@ export function deleteTask(id: number): void {
   );
 }
 
+export function deleteTasksByStatus(project: string, status: string): number {
+  const db = getDb();
+  const result = db
+    .prepare(
+      "UPDATE chunks SET deleted_at = datetime('now') WHERE project = ? AND status = ? AND deleted_at IS NULL"
+    )
+    .run(project, status);
+  return result.changes;
+}
+
 // --- Search tasks ---
 
 export function searchTasks(

@@ -12,6 +12,7 @@ import {
   getTask,
   searchTasks,
   listDeletedTasks,
+  deleteTasksByStatus,
   restoreTask,
   emptyTrash,
   listQueues,
@@ -176,6 +177,17 @@ project
     getDb();
     const count = emptyTrash(proj);
     console.log(`Permanently deleted ${count} task(s).`);
+  });
+
+project
+  .command("delete-by-status")
+  .description("Soft-delete all tasks in a project matching a status")
+  .argument("<project>", "project name")
+  .argument("<status>", "status to match (e.g. done)")
+  .action((proj: string, status: string) => {
+    getDb();
+    const count = deleteTasksByStatus(proj, status);
+    console.log(`Soft-deleted ${count} task(s) with status "${status}" in "${proj}".`);
   });
 
 // ─── brain queue ────────────────────────────────────────
@@ -609,6 +621,7 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
         { label: "Search tasks", value: "search" },
         { label: "View deleted tasks", value: "trash" },
         { label: "Restore a task", value: "restore" },
+        { label: "Delete tasks by status", value: "delete-by-status" },
         { label: "Empty trash", value: "empty-trash" },
         { label: "← Back", value: "back" },
       ],
@@ -628,6 +641,9 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
       case "restore":
         await restoreMenuInteractive(projectName);
         break;
+      case "delete-by-status":
+        await deleteByStatusInteractive(projectName, proj);
+        break;
       case "empty-trash":
         await emptyTrashMenuInteractive(projectName);
         break;
@@ -635,6 +651,33 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
         return;
     }
   }
+}
+
+async function deleteByStatusInteractive(projectName: string, proj: import("./db.js").Project): Promise<void> {
+  const status = await select({
+    message: "Delete all tasks with status",
+    options: [
+      ...proj.states.map((s) => ({ label: s, value: s })),
+      { label: "← Back", value: "" },
+    ],
+  });
+  if (bail(status)) return;
+  if (!status) return;
+
+  const tasks = listTasks(projectName, status);
+  if (tasks.length === 0) {
+    log.info(`No tasks with status "${status}".`);
+    return;
+  }
+
+  const ok = await confirm({
+    message: `Soft-delete ${tasks.length} task(s) with status "${status}"?`,
+  });
+  if (bail(ok)) return;
+  if (!ok) return;
+
+  const count = deleteTasksByStatus(projectName, status);
+  log.success(`Soft-deleted ${count} task(s).`);
 }
 
 async function browseTasks(projectName: string, proj: import("./db.js").Project): Promise<void> {

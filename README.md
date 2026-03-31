@@ -34,6 +34,7 @@ All tabular output is `\t`-delimited. Stdin-accepting commands read one item per
 | `brain project get-task <id>` | Full task as JSON |
 | `brain project search <query>` | Full-text search (`id \t project \t status \t title`) |
 | `brain project list-deleted [project]` | Trashed tasks (`id \t project \t title \t deleted_at`) |
+| `brain project delete-by-status <project> <status>` | Soft-delete all tasks matching a status |
 | `brain project restore-task <id>` | Restore a soft-deleted task |
 | `brain project empty-trash [project]` | Permanently delete all trashed tasks |
 

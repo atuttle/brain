@@ -11,6 +11,7 @@ Persistent SQLite store that gives Claude Code projects, work queues, and sets â
 ```bash
 pnpm install
 pnpm build
+pnpm link --global  # makes `brain` available everywhere
 ```
 
 ## CLI

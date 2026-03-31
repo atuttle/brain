@@ -102,8 +102,6 @@ For project-scoped use, add the same config to `.claude/settings.json` in your r
 | `search_tasks` | Full-text search across tasks |
 | `delete_task` | Soft-delete a task |
 
-> The `*_chunk*` variants (`create_chunks`, `list_chunks`, etc.) are still registered for backwards compatibility but are deprecated.
-
 **Queues**
 
 | Tool | Description |

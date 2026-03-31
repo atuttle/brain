@@ -293,49 +293,6 @@ server.registerTool("append_to_task", {
   inputSchema: appendToTaskSchema,
 }, appendToTaskHandler);
 
-// --- Backwards-compat chunk aliases (deprecated) ---
-
-server.registerTool("create_chunks", {
-  description:
-    "[Deprecated: use create_tasks] Create one or more chunks in a project.",
-  inputSchema: createTasksSchema,
-}, createTasksHandler);
-
-server.registerTool("list_chunks", {
-  description:
-    "[Deprecated: use list_tasks] List chunks for a project, optionally filtered by status.",
-  inputSchema: listTasksSchema,
-}, listTasksHandler);
-
-server.registerTool("get_chunk", {
-  description: "[Deprecated: use get_task] Get the full content of a chunk by ID.",
-  inputSchema: getTaskSchema,
-}, getTaskHandler);
-
-server.registerTool("update_chunk", {
-  description:
-    "[Deprecated: use update_task] Update a chunk's fields.",
-  inputSchema: updateTaskSchema,
-}, updateTaskHandler);
-
-server.registerTool("delete_chunk", {
-  description:
-    "[Deprecated: use delete_task] Soft-delete a chunk.",
-  inputSchema: deleteTaskSchema,
-}, deleteTaskHandler);
-
-server.registerTool("search_chunks", {
-  description:
-    "[Deprecated: use search_tasks] Search chunks by keyword.",
-  inputSchema: searchTasksSchema,
-}, searchTasksHandler);
-
-server.registerTool("append_to_chunk", {
-  description:
-    "[Deprecated: use append_to_task] Append text to a chunk's body.",
-  inputSchema: appendToTaskSchema,
-}, appendToTaskHandler);
-
 // --- list_queues ---
 
 server.registerTool("list_queues", {

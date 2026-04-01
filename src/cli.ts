@@ -28,6 +28,7 @@ import {
   listSetMembers,
   listSets,
   deleteSet,
+  countTasksByStatus,
   type TaskSummary,
 } from "./db.js";
 import { execSync } from "child_process";
@@ -187,6 +188,22 @@ project
     getDb();
     const count = emptyTrash(proj);
     console.log(`Permanently deleted ${count} task(s).`);
+  });
+
+project
+  .command("statuses")
+  .description("Show defined statuses for a project")
+  .argument("<project>", "project name")
+  .action((name: string) => {
+    getDb();
+    const proj = getProject(name);
+    if (!proj) {
+      console.error(`Project "${name}" not found.`);
+      process.exit(1);
+    }
+    for (const s of proj.states) {
+      console.log(s);
+    }
   });
 
 project
@@ -629,6 +646,7 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
       options: [
         { label: "Browse tasks", value: "browse" },
         { label: "Search tasks", value: "search" },
+        { label: "View statuses", value: "statuses" },
         { label: "View deleted tasks", value: "trash" },
         { label: "Restore a task", value: "restore" },
         { label: "Delete tasks by status", value: "delete-by-status" },
@@ -644,6 +662,9 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
         break;
       case "search":
         await searchMenuInteractive(projectName);
+        break;
+      case "statuses":
+        log.info(`Statuses for ${projectName}: ${proj.states.join(", ")}`);
         break;
       case "trash":
         await viewTrash(projectName);
@@ -664,10 +685,11 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
 }
 
 async function deleteByStatusInteractive(projectName: string, proj: import("./db.js").Project): Promise<void> {
+  const counts = countTasksByStatus(projectName);
   const status = await select({
     message: "Delete all tasks with status",
     options: [
-      ...proj.states.map((s) => ({ label: s, value: s })),
+      ...proj.states.map((s) => ({ label: `${s} (${counts[s] ?? 0})`, value: s })),
       { label: "← Back", value: "" },
     ],
   });
@@ -691,11 +713,13 @@ async function deleteByStatusInteractive(projectName: string, proj: import("./db
 }
 
 async function browseTasks(projectName: string, proj: import("./db.js").Project): Promise<void> {
+  const counts = countTasksByStatus(projectName);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const statusFilter = await select({
     message: "Filter by status",
     options: [
-      { label: "All", value: "" },
-      ...proj.states.map((s) => ({ label: s, value: s })),
+      { label: `All (${total})`, value: "" },
+      ...proj.states.map((s) => ({ label: `${s} (${counts[s] ?? 0})`, value: s })),
     ],
   });
   if (bail(statusFilter)) return;

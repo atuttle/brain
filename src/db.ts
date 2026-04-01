@@ -136,6 +136,20 @@ export function upsertProject(
   return getProject(name)!;
 }
 
+export function countTasksByStatus(project: string): Record<string, number> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT status, COUNT(*) AS count FROM chunks
+       WHERE project = ? AND deleted_at IS NULL
+       GROUP BY status`
+    )
+    .all(project) as { status: string; count: number }[];
+  const counts: Record<string, number> = {};
+  for (const r of rows) counts[r.status] = r.count;
+  return counts;
+}
+
 // --- Task operations ---
 
 export interface Task {

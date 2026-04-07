@@ -569,6 +569,21 @@ function bail(value: unknown): value is symbol {
   return false;
 }
 
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatShorthand(parts: string[]): string {
+  return parts.map(shellQuote).join(" ");
+}
+
+function showShorthand(parts: string[]): void {
+  log.message(`shorthand: \`${formatShorthand(parts)}\``);
+}
+
 async function mainMenu(): Promise<void> {
   intro("brain");
 
@@ -664,6 +679,7 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
         await searchMenuInteractive(projectName);
         break;
       case "statuses":
+        showShorthand(["brain", "project", "statuses", projectName]);
         log.info(`Statuses for ${projectName}: ${proj.states.join(", ")}`);
         break;
       case "trash":
@@ -752,6 +768,7 @@ async function browseTasks(projectName: string, proj: import("./db.js").Project)
     return;
   }
 
+  showShorthand(["brain", "project", "get-task", String(full.id)]);
   log.info(`${"─".repeat(60)}`);
   log.message(`#${full.id} (${full.status}) — ${full.title}`);
   log.message(`Sequence: ${full.sequence || "(none)"}  Created: ${full.created_at}  Updated: ${full.updated_at}`);
@@ -771,6 +788,7 @@ async function searchMenuInteractive(projectName: string): Promise<void> {
     return;
   }
 
+  showShorthand(["brain", "project", "search", "--project", projectName, query.trim()]);
   log.info(`${results.length} result(s):`);
   log.message(results.map((t) => `  #${t.id} (${t.status}) ${t.title}`).join("\n"));
 }
@@ -782,6 +800,7 @@ async function viewTrash(projectName: string): Promise<void> {
     return;
   }
 
+  showShorthand(["brain", "project", "list-deleted", projectName]);
   log.info(`${deleted.length} deleted task(s):`);
   log.message(deleted.map((t) => `  #${t.id} ${t.title} — deleted ${t.deleted_at}`).join("\n"));
 }
@@ -808,6 +827,7 @@ async function restoreMenuInteractive(projectName: string): Promise<void> {
   if (taskId === -1) return;
 
   const restored = restoreTask(taskId);
+  showShorthand(["brain", "project", "restore-task", String(taskId)]);
   log.success(`Restored task #${restored.id}: ${restored.title}`);
 }
 
@@ -827,6 +847,7 @@ async function emptyTrashMenuInteractive(projectName: string): Promise<void> {
   if (bail(ok)) return;
   if (!ok) return;
 
+  showShorthand(["brain", "project", "empty-trash", projectName]);
   const count = emptyTrash(projectName);
   log.success(`Permanently deleted ${count} task(s).`);
 }
@@ -847,6 +868,7 @@ async function globalEmptyTrashMenu(): Promise<void> {
   if (bail(ok)) return;
   if (!ok) return;
 
+  showShorthand(["brain", "project", "empty-trash"]);
   const count = emptyTrash();
   log.success(`Permanently deleted ${count} task(s).`);
 }
@@ -893,6 +915,7 @@ function listQueuesInteractive(): void {
     return;
   }
 
+  showShorthand(["brain", "queue", "list"]);
   log.info(`${queues.length} queue(s):`);
   log.message(queues.map((q) => `  ${q.name}  (${q.item_count} items)  created: ${q.created_at}`).join("\n"));
 }
@@ -922,6 +945,7 @@ async function viewQueueMenu(): Promise<void> {
     return;
   }
 
+  showShorthand(["brain", "queue", "items", queueName]);
   log.info(`${items.length} item(s) in "${queueName}":`);
   log.message(items.map((item) => `  #${item.id}  ${item.value}`).join("\n"));
 }
@@ -945,6 +969,7 @@ async function enqueueMenuInteractive(): Promise<void> {
     if (bail(value)) return;
     if (!value.trim()) return;
     const ids = enqueue(queueName.trim(), [value.trim()]);
+    showShorthand(["sh", "-lc", `printf '%s\\n' ${shellQuote(value.trim())} | ${formatShorthand(["brain", "queue", "add", queueName.trim()])}`]);
     log.success(`Enqueued 1 item (id: ${ids[0]})`);
   } else {
     log.info("Enter items one per line. Empty line to finish:");
@@ -960,6 +985,7 @@ async function enqueueMenuInteractive(): Promise<void> {
       return;
     }
     const ids = enqueue(queueName.trim(), lines);
+    showShorthand(["sh", "-lc", `printf '%s\\n' ${lines.map(shellQuote).join(" ")} | ${formatShorthand(["brain", "queue", "add", queueName.trim()])}`]);
     log.success(`Enqueued ${ids.length} item(s).`);
   }
 }
@@ -987,6 +1013,7 @@ async function deleteQueueItemMenuInteractive(): Promise<void> {
   if (bail(itemId)) return;
 
   if (itemId === -1) return;
+  showShorthand(["brain", "queue", "delete-item", String(itemId)]);
   deleteQueueItem(itemId);
   log.success(`Deleted item #${itemId}.`);
 }
@@ -1002,6 +1029,7 @@ async function deleteQueueMenuInteractive(): Promise<void> {
   if (bail(ok)) return;
   if (!ok) return;
 
+  showShorthand(["brain", "queue", "delete", queueName]);
   deleteQueue(queueName);
   log.success(`Deleted queue "${queueName}".`);
 }
@@ -1056,6 +1084,7 @@ function listSetsInteractive(): void {
     return;
   }
 
+  showShorthand(["brain", "set", "list"]);
   log.info(`${sets.length} set(s):`);
   log.message(sets.map((s) => `  ${s.name}  (${s.member_count} members)`).join("\n"));
 }
@@ -1085,6 +1114,7 @@ async function viewSetMenu(): Promise<void> {
     return;
   }
 
+  showShorthand(["brain", "set", "members", setName]);
   log.info(`${members.length} member(s) in "${setName}":`);
   log.message(members.map((m) => `  ${m}`).join("\n"));
 }
@@ -1108,6 +1138,7 @@ async function addToSetMenuInteractive(): Promise<void> {
     if (bail(key)) return;
     if (!key.trim()) return;
     addToSet(setName.trim(), key.trim());
+    showShorthand(["brain", "set", "add", setName.trim(), "--key", key.trim()]);
     log.success(`Added "${key.trim()}" to set "${setName.trim()}".`);
   } else {
     const keys: string[] = [];
@@ -1122,6 +1153,7 @@ async function addToSetMenuInteractive(): Promise<void> {
       return;
     }
     const added = addManyToSet(setName.trim(), keys);
+    showShorthand(["sh", "-lc", `printf '%s\\n' ${keys.map(shellQuote).join(" ")} | ${formatShorthand(["brain", "set", "add", setName.trim()])}`]);
     log.success(`Added ${added} key(s) to set "${setName.trim()}" (${keys.length - added} already existed).`);
   }
 }
@@ -1134,6 +1166,7 @@ async function checkSetMenuInteractive(): Promise<void> {
   if (bail(key)) return;
   if (!key.trim()) return;
 
+  showShorthand(["brain", "set", "has", setName, "--key", key.trim()]);
   if (setHas(setName, key.trim())) {
     log.success(`"${key.trim()}" IS in set "${setName}".`);
   } else {
@@ -1161,6 +1194,7 @@ async function removeFromSetMenuInteractive(): Promise<void> {
   if (bail(key)) return;
   if (!key) return;
 
+  showShorthand(["brain", "set", "remove", setName, "--key", key]);
   removeFromSet(setName, key);
   log.success(`Removed "${key}" from set "${setName}".`);
 }
@@ -1176,6 +1210,7 @@ async function deleteSetMenuInteractive(): Promise<void> {
   if (bail(ok)) return;
   if (!ok) return;
 
+  showShorthand(["brain", "set", "delete", setName]);
   const count = deleteSet(setName);
   log.success(`Deleted set "${setName}" (${count} member(s)).`);
 }
@@ -1187,6 +1222,7 @@ async function installCronInteractive(): Promise<void> {
   if (bail(ok)) return;
   if (!ok) return;
 
+  showShorthand(["brain", "backup", "install-cron"]);
   const nodePath = process.execPath;
   const cliPath = process.argv[1];
   const cronLine = `0 * * * * "${nodePath}" "${cliPath}" backup`;

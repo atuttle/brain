@@ -14,8 +14,9 @@ import {
   listQueues,
   enqueue,
   getQueueLength,
-  getNextQueueItem,
+  claimNextQueueItem,
   deleteQueueItem,
+  releaseQueueItem,
   listSets,
   addToSet,
   removeFromSet,
@@ -336,7 +337,7 @@ server.registerTool("enqueue", {
 // --- get_queue_length ---
 
 server.registerTool("get_queue_length", {
-  description: "Get the number of items in a queue.",
+  description: "Get the number of unclaimed items in a queue.",
   inputSchema: {
     queue: z.string().describe("Queue name"),
   },
@@ -347,19 +348,19 @@ server.registerTool("get_queue_length", {
   };
 });
 
-// --- get_next_queue_item ---
+// --- claim_queue_item ---
 
-server.registerTool("get_next_queue_item", {
+server.registerTool("claim_queue_item", {
   description:
-    "Peek at the next item in a queue (FIFO). Returns the item but does not remove it. Call delete_queue_item with the returned ID when done processing.",
+    "Claim the next available item from a queue (FIFO). The item is hidden from other consumers. Call complete_queue_item when done, or release_queue_item to return it to the queue.",
   inputSchema: {
     queue: z.string().describe("Queue name"),
   },
 }, async ({ queue }) => {
-  const item = getNextQueueItem(queue);
+  const item = claimNextQueueItem(queue);
   if (!item) {
     return {
-      content: [{ type: "text" as const, text: `Queue "${queue}" is empty.` }],
+      content: [{ type: "text" as const, text: `Queue "${queue}" is empty (no unclaimed items).` }],
     };
   }
   return {
@@ -367,11 +368,11 @@ server.registerTool("get_next_queue_item", {
   };
 });
 
-// --- delete_queue_item ---
+// --- complete_queue_item ---
 
-server.registerTool("delete_queue_item", {
+server.registerTool("complete_queue_item", {
   description:
-    "Delete an item from a queue by ID. Use this after successfully processing an item returned by get_next_queue_item.",
+    "Mark a queue item as complete (removes it permanently). Use after successfully processing an item from claim_queue_item.",
   inputSchema: {
     id: z.coerce.number().describe("Queue item ID"),
   },
@@ -379,7 +380,29 @@ server.registerTool("delete_queue_item", {
   try {
     deleteQueueItem(id);
     return {
-      content: [{ type: "text" as const, text: `Queue item ${id} deleted.` }],
+      content: [{ type: "text" as const, text: `Queue item ${id} completed and removed.` }],
+    };
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+});
+
+// --- release_queue_item ---
+
+server.registerTool("release_queue_item", {
+  description:
+    "Release a claimed queue item back to the queue so another consumer can claim it.",
+  inputSchema: {
+    id: z.coerce.number().describe("Queue item ID"),
+  },
+}, async ({ id }) => {
+  try {
+    releaseQueueItem(id);
+    return {
+      content: [{ type: "text" as const, text: `Queue item ${id} released back to queue.` }],
     };
   } catch (e) {
     return {

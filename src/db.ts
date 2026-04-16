@@ -53,7 +53,8 @@ function migrate(db: Database.Database): void {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       queue      TEXT NOT NULL REFERENCES queues(name) ON DELETE CASCADE,
       value      TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      claimed_at TEXT DEFAULT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_queue_items_queue
@@ -65,6 +66,18 @@ function migrate(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (name, key)
     );
+  `);
+
+  // Migration: add claimed_at to queue_items for parallel consumer support
+  try {
+    db.exec(`ALTER TABLE queue_items ADD COLUMN claimed_at TEXT DEFAULT NULL`);
+  } catch (_) {
+    // Column already exists — safe to ignore
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_queue_items_unclaimed
+      ON queue_items(queue, id) WHERE claimed_at IS NULL;
   `);
 }
 
@@ -134,6 +147,26 @@ export function upsertProject(
   ).run(name, statesJson);
 
   return getProject(name)!;
+}
+
+export function deleteProject(name: string): void {
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT name FROM projects WHERE name = ?")
+    .get(name);
+  if (!existing) throw new Error(`Project "${name}" not found`);
+
+  const row = db
+    .prepare("SELECT COUNT(*) AS count FROM chunks WHERE project = ?")
+    .get(name) as { count: number };
+  const taskCount = row?.count ?? 0;
+  if (taskCount > 0) {
+    throw new Error(
+      `Project "${name}" is not empty (${taskCount} task(s), including trashed). Delete all tasks and empty trash first.`
+    );
+  }
+
+  db.prepare("DELETE FROM projects WHERE name = ?").run(name);
 }
 
 export function countTasksByStatus(project: string): Record<string, number> {
@@ -429,6 +462,7 @@ export interface QueueItem {
   queue: string;
   value: string;
   created_at: string;
+  claimed_at: string | null;
 }
 
 export interface QueueSummary extends Queue {
@@ -441,7 +475,7 @@ export function listQueues(): QueueSummary[] {
     .prepare(
       `SELECT q.name, q.created_at, COUNT(qi.id) AS item_count
        FROM queues q
-       LEFT JOIN queue_items qi ON qi.queue = q.name
+       LEFT JOIN queue_items qi ON qi.queue = q.name AND qi.claimed_at IS NULL
        GROUP BY q.name
        ORDER BY q.name`
     )
@@ -451,7 +485,7 @@ export function listQueues(): QueueSummary[] {
 export function getQueueLength(queue: string): number {
   const db = getDb();
   const row = db
-    .prepare("SELECT COUNT(*) AS count FROM queue_items WHERE queue = ?")
+    .prepare("SELECT COUNT(*) AS count FROM queue_items WHERE queue = ? AND claimed_at IS NULL")
     .get(queue) as { count: number } | undefined;
   return row?.count ?? 0;
 }
@@ -482,20 +516,36 @@ export function enqueue(queue: string, items: string[]): number[] {
   return ids;
 }
 
-export function getNextQueueItem(queue: string): QueueItem | null {
+export function claimNextQueueItem(queue: string): QueueItem | null {
   const db = getDb();
   const row = db
     .prepare(
-      "SELECT * FROM queue_items WHERE queue = ? ORDER BY id ASC LIMIT 1"
+      `UPDATE queue_items
+       SET claimed_at = datetime('now')
+       WHERE id = (
+         SELECT id FROM queue_items
+         WHERE queue = ? AND claimed_at IS NULL
+         ORDER BY id ASC
+         LIMIT 1
+       )
+       RETURNING *`
     )
     .get(queue) as QueueItem | undefined;
   return row ?? null;
 }
 
-export function listQueueItems(queue: string): QueueItem[] {
+export function listQueueItems(queue: string, includeClaimed = false): QueueItem[] {
+  const db = getDb();
+  const sql = includeClaimed
+    ? "SELECT * FROM queue_items WHERE queue = ? ORDER BY id ASC"
+    : "SELECT * FROM queue_items WHERE queue = ? AND claimed_at IS NULL ORDER BY id ASC";
+  return db.prepare(sql).all(queue) as QueueItem[];
+}
+
+export function listClaimedItems(queue: string): QueueItem[] {
   const db = getDb();
   return db
-    .prepare("SELECT * FROM queue_items WHERE queue = ? ORDER BY id ASC")
+    .prepare("SELECT * FROM queue_items WHERE queue = ? AND claimed_at IS NOT NULL ORDER BY id ASC")
     .all(queue) as QueueItem[];
 }
 
@@ -505,6 +555,22 @@ export function deleteQueueItem(id: number): void {
     .prepare("DELETE FROM queue_items WHERE id = ?")
     .run(id);
   if (result.changes === 0) throw new Error(`Queue item ${id} not found`);
+}
+
+export function releaseQueueItem(id: number): void {
+  const db = getDb();
+  const result = db
+    .prepare("UPDATE queue_items SET claimed_at = NULL WHERE id = ? AND claimed_at IS NOT NULL")
+    .run(id);
+  if (result.changes === 0) throw new Error(`Queue item ${id} not found or not claimed`);
+}
+
+export function releaseAllQueueItems(queue: string): number {
+  const db = getDb();
+  const result = db
+    .prepare("UPDATE queue_items SET claimed_at = NULL WHERE queue = ? AND claimed_at IS NOT NULL")
+    .run(queue);
+  return result.changes;
 }
 
 export function deleteQueue(queue: string): number {

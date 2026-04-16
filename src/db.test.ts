@@ -7,6 +7,7 @@ import {
   listProjectDetails,
   getProject,
   upsertProject,
+  deleteProject,
   createTasks,
   listTasks,
   getTask,
@@ -20,9 +21,12 @@ import {
   listQueues,
   enqueue,
   getQueueLength,
-  getNextQueueItem,
+  claimNextQueueItem,
   listQueueItems,
+  listClaimedItems,
   deleteQueueItem,
+  releaseQueueItem,
+  releaseAllQueueItems,
   deleteQueue,
   listSets,
   addToSet,
@@ -81,6 +85,31 @@ describe("projects", () => {
 
   it("getProject returns null for nonexistent", () => {
     expect(getProject("nope")).toBeNull();
+  });
+
+  it("deletes an empty project", () => {
+    upsertProject("p");
+    deleteProject("p");
+    expect(getProject("p")).toBeNull();
+    expect(listProjects()).toEqual([]);
+  });
+
+  it("rejects deleting a project with active or trashed tasks", () => {
+    upsertProject("p");
+    const [id] = createTasks("p", [{ title: "t" }]);
+
+    expect(() => deleteProject("p")).toThrow("not empty");
+
+    deleteTask(id);
+    expect(() => deleteProject("p")).toThrow("not empty");
+
+    expect(emptyTrash("p")).toBe(1);
+    deleteProject("p");
+    expect(getProject("p")).toBeNull();
+  });
+
+  it("throws for nonexistent project deletion", () => {
+    expect(() => deleteProject("missing")).toThrow('Project "missing" not found');
   });
 
   it("listProjectDetails includes task counts", () => {
@@ -549,34 +578,108 @@ describe("getQueueLength", () => {
   });
 });
 
-describe("getNextQueueItem", () => {
+describe("claimNextQueueItem", () => {
   it("returns null for empty queue", () => {
-    expect(getNextQueueItem("nope")).toBeNull();
+    expect(claimNextQueueItem("nope")).toBeNull();
   });
 
-  it("returns the first item (peek, no removal)", () => {
+  it("claims the first item and marks it", () => {
     enqueue("q", ["first", "second"]);
-    const item1 = getNextQueueItem("q")!;
-    expect(item1.value).toBe("first");
-
-    // calling again returns the same item
-    const item2 = getNextQueueItem("q")!;
-    expect(item2.id).toBe(item1.id);
+    const item = claimNextQueueItem("q")!;
+    expect(item.value).toBe("first");
+    expect(item.claimed_at).not.toBeNull();
   });
 
-  it("advances after deleting the head", () => {
-    enqueue("q", ["first", "second"]);
-    const head = getNextQueueItem("q")!;
-    deleteQueueItem(head.id);
+  it("sequential claims return different items", () => {
+    enqueue("q", ["a", "b", "c"]);
+    const first = claimNextQueueItem("q")!;
+    const second = claimNextQueueItem("q")!;
+    expect(first.id).not.toBe(second.id);
+    expect(first.value).toBe("a");
+    expect(second.value).toBe("b");
+  });
 
-    const next = getNextQueueItem("q")!;
-    expect(next.value).toBe("second");
+  it("returns null after all items claimed", () => {
+    enqueue("q", ["only"]);
+    claimNextQueueItem("q");
+    expect(claimNextQueueItem("q")).toBeNull();
   });
 
   it("returns null after all items deleted", () => {
     const [id] = enqueue("q", ["only"]);
     deleteQueueItem(id);
-    expect(getNextQueueItem("q")).toBeNull();
+    expect(claimNextQueueItem("q")).toBeNull();
+  });
+});
+
+describe("claimed items visibility", () => {
+  it("claimed items are hidden from listQueueItems by default", () => {
+    enqueue("q", ["a", "b", "c"]);
+    claimNextQueueItem("q");
+    expect(listQueueItems("q")).toHaveLength(2);
+  });
+
+  it("listQueueItems with includeClaimed shows all", () => {
+    enqueue("q", ["a", "b", "c"]);
+    claimNextQueueItem("q");
+    expect(listQueueItems("q", true)).toHaveLength(3);
+  });
+
+  it("listClaimedItems returns only claimed items", () => {
+    enqueue("q", ["a", "b", "c"]);
+    claimNextQueueItem("q");
+    const claimed = listClaimedItems("q");
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0].value).toBe("a");
+  });
+
+  it("getQueueLength counts only unclaimed items", () => {
+    enqueue("q", ["a", "b", "c"]);
+    claimNextQueueItem("q");
+    expect(getQueueLength("q")).toBe(2);
+  });
+
+  it("listQueues item_count counts only unclaimed items", () => {
+    enqueue("q", ["a", "b", "c"]);
+    claimNextQueueItem("q");
+    const queues = listQueues();
+    expect(queues[0].item_count).toBe(2);
+  });
+});
+
+describe("releaseQueueItem", () => {
+  it("makes item claimable again", () => {
+    enqueue("q", ["a"]);
+    const item = claimNextQueueItem("q")!;
+    expect(claimNextQueueItem("q")).toBeNull();
+    releaseQueueItem(item.id);
+    const reclaimed = claimNextQueueItem("q")!;
+    expect(reclaimed.id).toBe(item.id);
+  });
+
+  it("throws for unclaimed item", () => {
+    const [id] = enqueue("q", ["a"]);
+    expect(() => releaseQueueItem(id)).toThrow("not found or not claimed");
+  });
+
+  it("throws for nonexistent id", () => {
+    expect(() => releaseQueueItem(99999)).toThrow("not found or not claimed");
+  });
+});
+
+describe("releaseAllQueueItems", () => {
+  it("releases all claimed items and returns count", () => {
+    enqueue("q", ["a", "b", "c"]);
+    claimNextQueueItem("q");
+    claimNextQueueItem("q");
+    const count = releaseAllQueueItems("q");
+    expect(count).toBe(2);
+    expect(getQueueLength("q")).toBe(3);
+  });
+
+  it("returns 0 when nothing is claimed", () => {
+    enqueue("q", ["a"]);
+    expect(releaseAllQueueItems("q")).toBe(0);
   });
 });
 

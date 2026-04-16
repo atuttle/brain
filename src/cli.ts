@@ -8,6 +8,7 @@ import {
   listProjectDetails,
   getProject,
   upsertProject,
+  deleteProject,
   listTasks,
   getTask,
   searchTasks,
@@ -17,9 +18,12 @@ import {
   emptyTrash,
   listQueues,
   enqueue,
-  getNextQueueItem,
+  claimNextQueueItem,
   listQueueItems,
+  listClaimedItems,
   deleteQueueItem,
+  releaseQueueItem,
+  releaseAllQueueItems,
   deleteQueue,
   addToSet,
   addManyToSet,
@@ -34,6 +38,7 @@ import {
 import { execSync } from "child_process";
 import { mkdirSync, readdirSync, statSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
+import { run as runQueue, type OutputMode } from "./queue-runner.js";
 
 const BACKUP_DIR = join(dirname(getDbPath()), "backups");
 
@@ -207,6 +212,21 @@ project
   });
 
 project
+  .command("delete")
+  .description("Delete a project only when it has zero tasks, including trashed")
+  .argument("<project>", "project name")
+  .action((name: string) => {
+    getDb();
+    try {
+      deleteProject(name);
+      console.log(`Deleted project "${name}".`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+project
   .command("delete-by-status")
   .description("Soft-delete all tasks in a project matching a status")
   .argument("<project>", "project name")
@@ -272,11 +292,11 @@ queue
 
 queue
   .command("next")
-  .description("Peek at the next FIFO item without removing it")
+  .description("Claim the next FIFO item (hides it from other consumers)")
   .argument("<queue>", "queue name")
   .action((queueName: string) => {
     getDb();
-    const item = getNextQueueItem(queueName);
+    const item = claimNextQueueItem(queueName);
     if (!item) {
       process.exit(1);
     }
@@ -284,8 +304,54 @@ queue
   });
 
 queue
+  .command("claimed")
+  .description("List all claimed (in-progress) items in a queue")
+  .argument("<queue>", "queue name")
+  .action((queueName: string) => {
+    getDb();
+    const items = listClaimedItems(queueName);
+    if (items.length === 0) {
+      console.log("No claimed items.");
+      return;
+    }
+    for (const item of items) {
+      console.log(`${item.id}\t${item.value}`);
+    }
+  });
+
+queue
+  .command("release")
+  .description("Release a claimed item back to the queue")
+  .argument("<id>", "queue item ID")
+  .action((rawId: string) => {
+    getDb();
+    const id = Number(rawId);
+    if (!Number.isInteger(id)) {
+      console.error("Invalid item ID.");
+      process.exit(1);
+    }
+    try {
+      releaseQueueItem(id);
+      console.log(`Released queue item #${id}.`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+queue
+  .command("release-all")
+  .description("Release all claimed items in a queue")
+  .argument("<queue>", "queue name")
+  .action((queueName: string) => {
+    getDb();
+    const count = releaseAllQueueItems(queueName);
+    console.log(`Released ${count} claimed item(s) in "${queueName}".`);
+  });
+
+queue
   .command("delete-item")
-  .description("Delete a queue item by ID (call after processing)")
+  .description("Delete a queue item by ID (complete after processing)")
   .argument("<id>", "queue item ID")
   .action((rawId: string) => {
     getDb();
@@ -316,6 +382,64 @@ queue
       console.error((e as Error).message);
       process.exit(1);
     }
+  });
+
+queue
+  .command("run")
+  .description("Process queue items in parallel with an external command")
+  .argument("<queue>", "queue name")
+  .option("-c, --concurrency <n>", "number of parallel workers", "1")
+  .option("--stream", "disable TUI, show streaming log output")
+  .option("-s, --silent", "disable TUI, show progress lines only (no worker output)")
+  .option("-S, --extra-silent", "suppress all output (exit code only)")
+  .option("--debug [path]", "write per-item debug logs to a directory")
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .action(async (queueArg: string, opts: Record<string, string | boolean | undefined>, cmd: import("commander").Command) => {
+    const concurrency = parseInt(String(opts.concurrency || "1"), 10);
+    if (isNaN(concurrency) || concurrency < 1) {
+      console.error("Error: --concurrency must be a positive integer");
+      process.exit(1);
+    }
+
+    // Everything after the known args is the command to run.
+    // Commander puts unknown args in cmd.args after the queue positional.
+    const rawArgs = cmd.args.slice(1); // skip queue name (already parsed)
+    if (rawArgs.length === 0) {
+      console.error("Error: no command specified. Usage: brain queue run <queue> -c N <command...>");
+      process.exit(1);
+    }
+
+    // Determine output mode
+    let mode: OutputMode = "tui";
+    if (opts.extraSilent) {
+      mode = "extra-silent";
+    } else if (opts.silent) {
+      mode = "silent";
+    } else if (opts.stream || !process.stdout.isTTY) {
+      mode = "stream";
+    }
+
+    // Debug directory
+    let debugPath: string | undefined;
+    if (opts.debug !== undefined) {
+      if (typeof opts.debug === "string" && opts.debug.length > 0) {
+        debugPath = opts.debug;
+      } else {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        debugPath = `.brain-run/${ts}`;
+      }
+    }
+
+    const result = await runQueue({
+      queueName: queueArg,
+      concurrency,
+      command: rawArgs,
+      mode,
+      debugDir: debugPath,
+    });
+
+    process.exit(result.failed > 0 ? 1 : 0);
   });
 
 // ─── brain set ──────────────────────────────────────────
@@ -666,6 +790,7 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
         { label: "Restore a task", value: "restore" },
         { label: "Delete tasks by status", value: "delete-by-status" },
         { label: "Empty trash", value: "empty-trash" },
+        { label: "Delete project", value: "delete-project" },
         { label: "← Back", value: "back" },
       ],
     });
@@ -694,9 +819,32 @@ async function projectMenuInteractive(projectName: string): Promise<void> {
       case "empty-trash":
         await emptyTrashMenuInteractive(projectName);
         break;
+      case "delete-project":
+        if (await deleteProjectMenuInteractive(projectName)) {
+          return;
+        }
+        break;
       case "back":
         return;
     }
+  }
+}
+
+async function deleteProjectMenuInteractive(projectName: string): Promise<boolean> {
+  const ok = await confirm({
+    message: `Delete project "${projectName}"? It must have no active or trashed tasks.`,
+  });
+  if (bail(ok)) return false;
+  if (!ok) return false;
+
+  try {
+    showShorthand(["brain", "project", "delete", projectName]);
+    deleteProject(projectName);
+    log.success(`Deleted project "${projectName}".`);
+    return true;
+  } catch (e) {
+    log.error((e as Error).message);
+    return false;
   }
 }
 
@@ -881,7 +1029,10 @@ async function queuesMenu(): Promise<void> {
     options: [
       { label: "List queues", value: "list" },
       { label: "View queue contents", value: "view" },
+      { label: "View claimed items", value: "claimed" },
       { label: "Add items to queue", value: "enqueue" },
+      { label: "Release claimed item", value: "release" },
+      { label: "Release all claimed items", value: "release-all" },
       { label: "Delete item from queue", value: "delete-item" },
       { label: "Delete entire queue", value: "delete-queue" },
       { label: "← Back", value: "back" },
@@ -896,8 +1047,17 @@ async function queuesMenu(): Promise<void> {
     case "view":
       await viewQueueMenu();
       break;
+    case "claimed":
+      await viewClaimedMenu();
+      break;
     case "enqueue":
       await enqueueMenuInteractive();
+      break;
+    case "release":
+      await releaseQueueItemMenuInteractive();
+      break;
+    case "release-all":
+      await releaseAllMenuInteractive();
       break;
     case "delete-item":
       await deleteQueueItemMenuInteractive();
@@ -990,6 +1150,70 @@ async function enqueueMenuInteractive(): Promise<void> {
   }
 }
 
+async function viewClaimedMenu(): Promise<void> {
+  const queueName = await pickQueue();
+  if (!queueName) return;
+
+  const items = listClaimedItems(queueName);
+  if (items.length === 0) {
+    log.info("No claimed items.");
+    return;
+  }
+
+  showShorthand(["brain", "queue", "claimed", queueName]);
+  log.info(`${items.length} claimed item(s) in "${queueName}":`);
+  log.message(items.map((item) => `  #${item.id}  ${item.value}  claimed: ${item.claimed_at}`).join("\n"));
+}
+
+async function releaseQueueItemMenuInteractive(): Promise<void> {
+  const queueName = await pickQueue();
+  if (!queueName) return;
+
+  const items = listClaimedItems(queueName);
+  if (items.length === 0) {
+    log.info("No claimed items to release.");
+    return;
+  }
+
+  const itemId = await select({
+    message: "Select item to release",
+    options: [
+      ...items.map((item) => ({
+        label: `#${item.id}  ${item.value}`,
+        value: item.id,
+      })),
+      { label: "← Back", value: -1 as number },
+    ],
+  });
+  if (bail(itemId)) return;
+
+  if (itemId === -1) return;
+  showShorthand(["brain", "queue", "release", String(itemId)]);
+  releaseQueueItem(itemId);
+  log.success(`Released item #${itemId} back to queue.`);
+}
+
+async function releaseAllMenuInteractive(): Promise<void> {
+  const queueName = await pickQueue();
+  if (!queueName) return;
+
+  const claimed = listClaimedItems(queueName);
+  if (claimed.length === 0) {
+    log.info("No claimed items to release.");
+    return;
+  }
+
+  const ok = await confirm({
+    message: `Release ${claimed.length} claimed item(s) in "${queueName}"?`,
+  });
+  if (bail(ok)) return;
+  if (!ok) return;
+
+  showShorthand(["brain", "queue", "release-all", queueName]);
+  const count = releaseAllQueueItems(queueName);
+  log.success(`Released ${count} item(s).`);
+}
+
 async function deleteQueueItemMenuInteractive(): Promise<void> {
   const queueName = await pickQueue();
   if (!queueName) return;
@@ -1022,7 +1246,7 @@ async function deleteQueueMenuInteractive(): Promise<void> {
   const queueName = await pickQueue();
   if (!queueName) return;
 
-  const items = listQueueItems(queueName);
+  const items = listQueueItems(queueName, true);
   const ok = await confirm({
     message: `Delete queue "${queueName}" and its ${items.length} item(s)? This cannot be undone.`,
   });

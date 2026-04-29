@@ -71,7 +71,7 @@ Everything after the flags is the command to run, verbatim. Example:
 ```bash
 brain queue run review-queue -c 4 tsx .hunt/adversarial-code-review.ts
 brain queue run image-queue -c 8 python process.py --mode batch
-brain queue run my-queue ./my-worker.sh
+brain queue run my-queue --limit 10 ./my-worker.sh
 ```
 
 **Worker contract**
@@ -88,6 +88,7 @@ For each queue item, brain spawns one invocation of your command:
 | Flag | Description |
 |---|---|
 | `-c, --concurrency <n>` | Max parallel workers (default: 1) |
+| `--limit <n>` | Stop after N items have been claimed (active workers drain naturally) |
 | `--stream` | Disable TUI; stream progress + worker output line-by-line |
 | `-s, --silent` | Disable TUI; show progress lines only (no worker output) |
 | `-S, --extra-silent` | Suppress all output (exit code only) |

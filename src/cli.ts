@@ -389,6 +389,7 @@ queue
   .description("Process queue items in parallel with an external command")
   .argument("<queue>", "queue name")
   .option("-c, --concurrency <n>", "number of parallel workers", "1")
+  .option("--limit <n>", "stop after processing N items (success or failure)")
   .option("--stream", "disable TUI, show streaming log output")
   .option("-s, --silent", "disable TUI, show progress lines only (no worker output)")
   .option("-S, --extra-silent", "suppress all output (exit code only)")
@@ -400,6 +401,15 @@ queue
     if (isNaN(concurrency) || concurrency < 1) {
       console.error("Error: --concurrency must be a positive integer");
       process.exit(1);
+    }
+
+    let limit: number | undefined;
+    if (opts.limit !== undefined) {
+      limit = parseInt(String(opts.limit), 10);
+      if (isNaN(limit) || limit < 1) {
+        console.error("Error: --limit must be a positive integer");
+        process.exit(1);
+      }
     }
 
     // Everything after the known args is the command to run.
@@ -434,6 +444,7 @@ queue
     const result = await runQueue({
       queueName: queueArg,
       concurrency,
+      limit,
       command: rawArgs,
       mode,
       debugDir: debugPath,

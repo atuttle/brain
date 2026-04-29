@@ -22,6 +22,7 @@ export interface RunOptions {
   command: string[];
   mode: OutputMode;
   debugDir?: string;
+  limit?: number;
 }
 
 export interface RunResult {
@@ -37,6 +38,8 @@ let queueName: string;
 let command: string[];
 let mode: OutputMode;
 let debugDir: string | undefined;
+let limit: number | undefined;
+let claimed = 0;
 
 let completed = 0;
 let failed = 0;
@@ -220,6 +223,13 @@ async function runSlot(handle: SlotHandle): Promise<void> {
     startedAt: Date.now(),
   };
 
+  // Limit reached — stop claiming
+  if (limit !== undefined && claimed >= limit) {
+    draining = true;
+    refreshDisplay();
+    return;
+  }
+
   // Claim next item
   const item = claimNextQueueItem(queueName);
   if (!item) {
@@ -227,6 +237,11 @@ async function runSlot(handle: SlotHandle): Promise<void> {
     draining = true;
     refreshDisplay();
     return;
+  }
+  claimed++;
+  if (limit !== undefined && claimed >= limit) {
+    // Soft-drain: don't start any new work after this one
+    draining = true;
   }
 
   const label = truncateLabel(item.value);
@@ -430,6 +445,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
   sigintCount = 0;
   completed = 0;
   failed = 0;
+  claimed = 0;
   runtimes.length = 0;
   startTime.value = Date.now();
   display.reset();
@@ -439,6 +455,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
   command = options.command;
   mode = options.mode;
   debugDir = options.debugDir;
+  limit = options.limit;
 
   getDb();
 

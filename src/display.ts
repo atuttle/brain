@@ -18,6 +18,8 @@ export interface RunDisplayState {
   remaining: number;
   draining: boolean;
   elapsed: number;
+  avgRuntimeMs: number | null;
+  medianRuntimeMs: number | null;
 }
 
 const PHASE_COLORS: Record<SlotPhase, (s: string) => string> = {
@@ -38,6 +40,22 @@ function formatTime(ms: number): string {
   const m = Math.floor(totalSecs / 60);
   const s = totalSecs % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const secs = ms / 1000;
+  if (secs < 60) return `${secs.toFixed(1)}s`;
+  const totalMins = Math.floor(secs / 60);
+  const s = Math.round(secs - totalMins * 60);
+  if (totalMins < 60) return `${totalMins}m${String(s).padStart(2, "0")}s`;
+  const totalHours = Math.floor(totalMins / 60);
+  const m = totalMins - totalHours * 60;
+  if (totalHours < 24)
+    return `${totalHours}h${String(m).padStart(2, "0")}m`;
+  const d = Math.floor(totalHours / 24);
+  const h = totalHours - d * 24;
+  return `${d}d${String(h).padStart(2, "0")}h`;
 }
 
 export function render(state: RunDisplayState): string {
@@ -82,6 +100,19 @@ export function render(state: RunDisplayState): string {
   parts.push(pc.red(`failed: ${state.failed}`));
   parts.push(pc.dim(`remaining: ${state.remaining}`));
   lines.push("  " + parts.join("  "));
+
+  if (state.avgRuntimeMs !== null && state.medianRuntimeMs !== null) {
+    const stats = [
+      pc.dim(`avg: ${formatDuration(state.avgRuntimeMs)}`),
+      pc.dim(`median: ${formatDuration(state.medianRuntimeMs)}`),
+    ];
+    if (state.remaining > 0 && state.maxWorkers > 0) {
+      const etaMs =
+        (state.remaining / state.maxWorkers) * state.medianRuntimeMs;
+      stats.push(pc.dim(`eta: ${formatDuration(etaMs)}`));
+    }
+    lines.push("  " + stats.join("  "));
+  }
 
   lines.push(sep);
   lines.push(

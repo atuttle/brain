@@ -42,6 +42,22 @@ let completed = 0;
 let failed = 0;
 let remaining = 0;
 const startTime = { value: Date.now() };
+const runtimes: number[] = [];
+
+function recordRuntime(ms: number): void {
+  runtimes.push(ms);
+}
+
+function runtimeStats(): { avgMs: number; medianMs: number } | null {
+  if (runtimes.length === 0) return null;
+  const sum = runtimes.reduce((a, b) => a + b, 0);
+  const avgMs = sum / runtimes.length;
+  const sorted = [...runtimes].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const medianMs =
+    sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  return { avgMs, medianMs };
+}
 
 let slotStates: SlotState[] = [];
 let slots: (Promise<void> | null)[] = [];
@@ -72,6 +88,7 @@ function newWakePromise(): Promise<void> {
 // ── Display helpers ─────────────────────────────────────────────────────
 
 function getDisplayState(): RunDisplayState {
+  const stats = runtimeStats();
   return {
     queueName,
     slots: slotStates,
@@ -81,6 +98,8 @@ function getDisplayState(): RunDisplayState {
     remaining,
     draining,
     elapsed: Date.now() - startTime.value,
+    avgRuntimeMs: stats?.avgMs ?? null,
+    medianRuntimeMs: stats?.medianMs ?? null,
   };
 }
 
@@ -223,6 +242,7 @@ async function runSlot(handle: SlotHandle): Promise<void> {
   try {
     const result = await runWorker(item.value, item.id);
     const elapsedMs = Date.now() - slotStart;
+    recordRuntime(elapsedMs);
 
     if (result.code === 0) {
       // Success — delete the item (complete)
@@ -259,6 +279,7 @@ async function runSlot(handle: SlotHandle): Promise<void> {
     // Spawn error — delete and re-enqueue to tail
     const itemValue = item.value;
     const elapsedMs = Date.now() - slotStart;
+    recordRuntime(elapsedMs);
     try {
       deleteQueueItem(item.id);
       enqueue(queueName, [itemValue]);
@@ -409,6 +430,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
   sigintCount = 0;
   completed = 0;
   failed = 0;
+  runtimes.length = 0;
   startTime.value = Date.now();
   display.reset();
 

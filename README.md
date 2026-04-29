@@ -95,6 +95,15 @@ For each queue item, brain spawns one invocation of your command:
 
 Default mode is a live TUI when stdout is a TTY. Non-TTY (pipes, CI) auto-switches to `--stream`.
 
+**Live stats (TUI)**
+
+The TUI shows running averages once at least one worker has finished:
+
+- `avg` / `median` — per-thread runtime across the current session
+- `eta` — estimated wall-clock time remaining, computed as `(remaining / workers) × median`. Median is used over mean so a single stuck job doesn't blow up the estimate.
+
+Durations auto-scale: `350ms` → `12.3s` → `2m05s` → `1h32m` → `3d04h`.
+
 **Interactive controls (TUI)**
 
 - `+` / `=` — increase worker count
